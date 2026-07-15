@@ -17,6 +17,10 @@ import { RGB } from '../render/palette.js';
 const STRIDE_K = 0.45; // stride phase per unit travelled (kills foot sliding)
 const _v = new Vector3();
 const _dv = new Vector3();
+const _steel = RGB.iron.map((x) => x + 0.35); // cold blade steel
+const _molten = RGB.molten;
+const _sear = RGB.sear;
+const lerp3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
 // A Quenchling: waist-high, hooded, tin, big cold-iron blade. ~12 boxes/cyls,
 // budget 700 tris. His model is his health bar (melt system, Phase 2).
@@ -35,8 +39,17 @@ export class Tinn {
     this.prevYaw = 0;
     this.turnRate = 0;
     this._lastStep = 0;
+    this.combat = null;
+    this.keepFacing = false; // true during locked hops (face target, not motion)
 
     this._build();
+  }
+
+  setCombat(c) {
+    this.combat = c;
+  }
+  knockback(v) {
+    this.velocity.add(v);
   }
 
   get position() {
@@ -93,17 +106,18 @@ export class Tinn {
     // The cold-iron blade — nearly his own height. Held in handR, angled so it
     // rests forward-up rather than clipping the ground. Its own material so its
     // heat can recolour it (Phase 2).
-    this.bladeMat = makeN64Material({ tint: [1, 1, 1] });
+    // White base so blade colour is fully driven by uTint from blade heat
+    // (steel -> molten -> sear). Default cold steel tint set in _updateBlade.
+    this.bladeMat = makeN64Material({ tint: [0.5, 0.53, 0.58] });
     const blade = new Group();
     blade.position.set(0, -0.05, 0.02);
     blade.rotation.x = -1.15; // tilt the down-hang forward toward horizontal
     handR.add(blade);
     this.bladeBone = blade;
-    // guard + long blade
-    const bladeMesh = new Mesh(bakeFlat(new BoxGeometry(0.06, 0.95, 0.11), 'iron', { top: 1.1, floor: 0.7 }), this.bladeMat);
+    const bladeMesh = new Mesh(bakeFlat(new BoxGeometry(0.06, 0.95, 0.11), [1, 1, 1], { top: 1.1, floor: 0.7 }), this.bladeMat);
     bladeMesh.position.set(0, -0.5, 0);
     blade.add(bladeMesh);
-    const guard = new Mesh(bakeFlat(new BoxGeometry(0.2, 0.05, 0.14), 'iron'), this.bladeMat);
+    const guard = new Mesh(bakeFlat(new BoxGeometry(0.2, 0.05, 0.14), [1, 1, 1]), this.bladeMat);
     guard.position.set(0, -0.08, 0);
     blade.add(guard);
     this.blade = bladeMesh;
@@ -138,30 +152,45 @@ export class Tinn {
   }
 
   // ---- update ---------------------------------------------------------------
-  update(dt, input, basis, fx) {
+  // ctx: { basis, fx, heat, lockon }
+  update(dt, input, ctx) {
     this.time += dt;
     this.prevYaw = this.root.rotation.y;
+    const { basis, fx, heat, lockon } = ctx;
 
-    if (this.state === 'roll') this._updateRoll(dt, fx);
-    else this._updateGround(dt, input, basis, fx);
+    // Roll (Space) interrupts anything — the i-frame dodge out (§5).
+    if (this.state !== 'roll' && input.wasPressed(' ')) {
+      this.combat?.cancel();
+      this._startRoll(input, basis, fx, lockon);
+    }
 
+    const canAct = this.state !== 'roll';
+    this.combat?.update(dt, input, basis, canAct);
+
+    if (this.state === 'roll') {
+      this._updateRoll(dt, fx);
+    } else if (this.combat?.active) {
+      // Planted during an attack; combat moves the root (spin/lunge).
+      this.velocity.multiplyScalar(0.8);
+      this.speed = this.velocity.length();
+      this.state = 'attack';
+    } else {
+      this._updateGround(dt, input, basis, fx, lockon, heat);
+    }
+
+    this._updateBlade(heat);
     this.turnRate = shortestAngle(this.root.rotation.y - this.prevYaw) / Math.max(dt, 1e-4);
-    this._animate(dt, fx);
+    this._animate(dt, fx, heat);
     this._secondary(dt);
+    this._updateMelt(heat, fx);
 
-    // shadow under Tinn, flat on the ground
     this.shadow.position.set(this.root.position.x, 0.02, this.root.position.z);
-    const s = 1 - Math.min(this.speed / MOVE.runSpeed, 1) * 0.15;
+    const s = (1 - Math.min(this.speed / MOVE.runSpeed, 1) * 0.15) * (1 + (heat?.meltFactor || 0) * 0.2);
     this.shadow.scale.setScalar(s);
   }
 
-  _updateGround(dt, input, basis, fx) {
-    // Roll input (Space) — free dodge.
-    if (input.wasPressed(' ') && this.state !== 'roll') {
-      this._startRoll(input, basis, fx);
-      return;
-    }
-
+  _updateGround(dt, input, basis, fx, lockon, heat) {
+    const locked = lockon && lockon.active && lockon.target;
     _v.set(0, 0, 0);
     if (input.move.lengthSq() > 0) {
       _v.addScaledVector(basis.right, input.move.x).addScaledVector(basis.forward, input.move.y);
@@ -169,7 +198,9 @@ export class Tinn {
       _v.normalize();
     }
     const moving = _v.lengthSq() > 0.001;
-    const targetSpeed = moving ? MOVE.runSpeed : 0;
+    let top = MOVE.runSpeed * (heat?.meltSpeedMult ?? 1);
+    if (this.combat?.warding) top *= 0.5;
+    const targetSpeed = moving ? top : 0;
     _dv.copy(_v).multiplyScalar(targetSpeed).sub(this.velocity);
     const maxDelta = (moving ? MOVE.accel : MOVE.friction) * dt;
     if (_dv.length() > maxDelta) _dv.setLength(maxDelta);
@@ -180,7 +211,14 @@ export class Tinn {
     this.root.position.y = 0;
     this.speed = this.velocity.length();
 
-    if (this.speed > 0.25) {
+    if (locked) {
+      // Strafe: keep facing the target.
+      _v.copy(lockon.target.position).sub(this.root.position).setY(0);
+      if (_v.lengthSq() > 1e-4) {
+        const yaw = Math.atan2(_v.x, _v.z);
+        this.root.rotation.y = dampAngle(this.root.rotation.y, yaw, MOVE.turnLerp * 1.4, dt);
+      }
+    } else if (this.speed > 0.25) {
       const yaw = Math.atan2(this.velocity.x, this.velocity.z);
       this.root.rotation.y = dampAngle(this.root.rotation.y, yaw, MOVE.turnLerp, dt);
     }
@@ -188,19 +226,51 @@ export class Tinn {
     this.invuln = false;
   }
 
-  _startRoll(input, basis, fx) {
+  // Cold steel -> molten -> white-hot sear, driven by blade heat.
+  _updateBlade(heat) {
+    if (!heat) return;
+    const g = heat.bladeGlow;
+    let c;
+    if (heat.searing) c = _sear;
+    else if (g < 0.5) c = lerp3(_steel, _molten, g / 0.5);
+    else c = lerp3(_molten, _sear, (g - 0.5) / 0.5);
+    this.bladeMat.uniforms.uTint.value.setRGB(c[0], c[1], c[2]);
+    this.bladeMat.uniforms.uEmissive.value = heat.searing ? 1.0 : g * 0.85;
+  }
+
+  _updateMelt(heat, fx) {
+    const m = heat?.meltFactor || 0;
+    // Geometric sag: squash down and spread as he softens/puddles.
+    this.root.scale.set(1 + m * 0.14, 1 - m * 0.28, 1 + m * 0.14);
+    // Drip particles once he's Running/Failing.
+    if (m > 0.6 && fx && Math.random() < (m - 0.6) * 0.8) {
+      const off = Math.random() > 0.5 ? 0.22 : -0.22;
+      fx.pools.drips?.spawn?.({
+        x: this.root.position.x + off, y: 0.5 + Math.random() * 0.4, z: this.root.position.z + 0.1,
+        vx: 0, vy: -0.2, vz: 0, life: 0.7, size: 4, color: [_molten[0], _molten[1], _molten[2]],
+      });
+    }
+  }
+
+  _startRoll(input, basis, fx, lockon) {
     this.state = 'roll';
     this.rollTime = 0;
+    const locked = lockon && lockon.active && lockon.target;
     _v.set(0, 0, 0);
     if (input.move.lengthSq() > 0) {
       _v.addScaledVector(basis.right, input.move.x).addScaledVector(basis.forward, input.move.y);
       _v.y = 0;
       _v.normalize();
+    } else if (locked) {
+      // Backhop: away from the target.
+      _v.copy(this.root.position).sub(lockon.target.position).setY(0).normalize();
     } else {
       _v.set(Math.sin(this.root.rotation.y), 0, Math.cos(this.root.rotation.y));
     }
     this.rollDir.copy(_v);
-    this.root.rotation.y = Math.atan2(_v.x, _v.z);
+    // Locked dodges keep facing the target (backhop/sidehop feel); free rolls turn.
+    this.keepFacing = !!locked;
+    if (!locked) this.root.rotation.y = Math.atan2(_v.x, _v.z);
     if (fx) fx.ashPuff(this.root.position, 10);
   }
 
@@ -225,33 +295,47 @@ export class Tinn {
     }
   }
 
-  _animate(dt, fx) {
-    let pose;
-    if (this.state === 'roll') {
-      pose = Rig.sample(ANIM.roll, this.rollTime);
-    } else {
-      const prev = this.stridePhase;
-      this.stridePhase = (this.stridePhase + this.speed * dt * STRIDE_K) % 1;
-      // footstep puffs at the two plants of the cycle
-      if (this.speed > 1.5 && fx) {
-        for (const plant of [0.0, 0.5]) {
-          if (crossed(prev, this.stridePhase, plant)) {
-            const side = plant === 0 ? 0.12 : -0.12;
-            _v.set(side, 0, 0).applyAxisAngle(new Vector3(0, 1, 0), this.root.rotation.y);
-            fx.ashPuff(_v.add(this.root.position), 4);
-          }
+  _locoPose(dt, fx) {
+    const prev = this.stridePhase;
+    this.stridePhase = (this.stridePhase + this.speed * dt * STRIDE_K) % 1;
+    if (this.speed > 1.5 && fx) {
+      for (const plant of [0.0, 0.5]) {
+        if (crossed(prev, this.stridePhase, plant)) {
+          const side = plant === 0 ? 0.12 : -0.12;
+          _v.set(side, 0, 0).applyAxisAngle(new Vector3(0, 1, 0), this.root.rotation.y);
+          fx.ashPuff(_v.add(this.root.position), 4);
         }
       }
-      const idlePose = Rig.sample(ANIM.idle, this.time);
-      const walkPose = Rig.sample(ANIM.walk, this.stridePhase * ANIM.walk.duration);
-      const runPose = Rig.sample(ANIM.run, this.stridePhase * ANIM.run.duration);
-      const sN = MathUtils.clamp(this.speed / MOVE.runSpeed, 0, 1);
-      const wr = Rig.blend(
-        walkPose,
-        runPose,
-        MathUtils.clamp((this.speed - MOVE.walkSpeed) / (MOVE.runSpeed - MOVE.walkSpeed), 0, 1)
-      );
-      pose = Rig.blend(idlePose, wr, MathUtils.smoothstep(sN, 0.05, 0.55));
+    }
+    const idlePose = Rig.sample(ANIM.idle, this.time);
+    const walkPose = Rig.sample(ANIM.walk, this.stridePhase * ANIM.walk.duration);
+    const runPose = Rig.sample(ANIM.run, this.stridePhase * ANIM.run.duration);
+    const sN = MathUtils.clamp(this.speed / MOVE.runSpeed, 0, 1);
+    const wr = Rig.blend(
+      walkPose,
+      runPose,
+      MathUtils.clamp((this.speed - MOVE.walkSpeed) / (MOVE.runSpeed - MOVE.walkSpeed), 0, 1)
+    );
+    return Rig.blend(idlePose, wr, MathUtils.smoothstep(sN, 0.05, 0.55));
+  }
+
+  _animate(dt, fx, heat) {
+    let pose;
+    if (this.state === 'attack' && this.combat?.attackPose) {
+      pose = this.combat.attackPose; // upper body attack; legs relax to stance
+    } else if (this.state === 'roll') {
+      pose = Rig.sample(ANIM.roll, this.rollTime);
+    } else if (this.combat?.warding) {
+      pose = Rig.blend(this._locoPose(dt, fx), this.combat.wardPose(), 0.85);
+    } else {
+      pose = this._locoPose(dt, fx);
+    }
+
+    // §3.2: blend the whole rig toward a slumped pose weighted by melt (pose
+    // half; the geometric sag is the other half in _updateMelt).
+    const m = heat?.meltFactor || 0;
+    if (m > 0.02 && this.state !== 'roll') {
+      pose = Rig.blend(pose, SLUMP, m * 0.7);
     }
     this.rig.apply(pose);
   }
@@ -268,6 +352,17 @@ export class Tinn {
     this.rig.addRotation('head', [0, lag, 0]);
   }
 }
+
+// The slumped "melting" pose (§3.2): shoulders drop, torso and head droop.
+const SLUMP = {
+  torso: [0.35, 0, 0],
+  head: [0.45, 0, 0],
+  pelvis: [0.12, 0, 0],
+  shoulderL: [0.2, 0, 0.55],
+  shoulderR: [0.2, 0, -0.55],
+  hipL: [0.15, 0, 0],
+  hipR: [0.15, 0, 0],
+};
 
 // --- small helpers -----------------------------------------------------------
 function shortestAngle(a) {

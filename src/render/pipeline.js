@@ -11,6 +11,7 @@ import {
   RGBAFormat,
   GLSL3,
   Vector2,
+  Vector3,
 } from 'three';
 
 // ---------------------------------------------------------------------------
@@ -80,6 +81,8 @@ const postFrag = /* glsl */ `
   uniform sampler2D uScene;
   uniform vec2 uResolution;
   uniform float uBloom;
+  uniform float uDesat;      // 0..1 — screen desaturates toward molten (melt≥85)
+  uniform vec3 uMolten;
   in vec2 vUv;
   out vec4 outColor;
 
@@ -106,6 +109,13 @@ const postFrag = /* glsl */ `
     }
     if (wsum > 0.0) bloom /= wsum;
     col += bloom * uBloom;
+
+    // --- Melt desaturation: world drains toward molten as Tinn fails -------
+    if (uDesat > 0.001) {
+      float l = dot(col, vec3(0.299, 0.587, 0.114));
+      vec3 drained = mix(vec3(l), uMolten * (0.6 + l), 0.5);
+      col = mix(col, drained, uDesat);
+    }
 
     // --- Ordered dither + RGB5551 quantize --------------------------------
     float b = bayer4(gl_FragCoord.xy);
@@ -153,6 +163,8 @@ export class Pipeline {
         uScene: { value: this.rtScene.texture },
         uResolution: { value: this.res.clone() },
         uBloom: { value: 0.5 }, // subtle — CRT bleed, not Unreal (§2)
+        uDesat: { value: 0 },
+        uMolten: { value: new Vector3(1.0, 0.42, 0.1) },
       },
     });
     this.upscaleMat = new ShaderMaterial({
