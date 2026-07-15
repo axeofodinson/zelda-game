@@ -104,6 +104,7 @@ export class Pool {
     this.size = new Float32Array(capacity);
     this.size0 = new Float32Array(capacity);
     this.alpha = new Float32Array(capacity);
+    this.peak = new Float32Array(capacity);
     this.col = new Float32Array(capacity * 3);
     this.cursor = 0;
 
@@ -123,9 +124,10 @@ export class Pool {
     this.drag = opts.drag ?? 0;
   }
 
-  spawn({ x, y, z, vx = 0, vy = 0, vz = 0, life = 1, size = 4, color = [1, 1, 1] }) {
+  spawn({ x, y, z, vx = 0, vy = 0, vz = 0, life = 1, size = 4, color = [1, 1, 1], alpha = 1 }) {
     const i = this.cursor;
     this.cursor = (this.cursor + 1) % this.cap;
+    this.peak[i] = alpha;
     this.pos[i * 3] = x;
     this.pos[i * 3 + 1] = y;
     this.pos[i * 3 + 2] = z;
@@ -162,7 +164,7 @@ export class Pool {
       this.pos[k + 1] += this.vel[k + 1] * dt;
       this.pos[k + 2] += this.vel[k + 2] * dt;
       const t = Math.max(this.life[i] / this.maxLife[i], 0);
-      this.alpha[i] = t; // linear fade
+      this.alpha[i] = t * this.peak[i]; // linear fade toward the per-particle peak
       this.size[i] = this.size0[i] * (this.opts.grow ? 2 - t : 1);
     }
     this.geo.attributes.position.needsUpdate = true;
@@ -191,7 +193,7 @@ export class AshSnow {
       this.vel[i * 3] = (Math.random() * 2 - 1) * 0.3;
       this.vel[i * 3 + 1] = -0.4 - Math.random() * 0.5;
       this.vel[i * 3 + 2] = (Math.random() * 2 - 1) * 0.3;
-      size[i] = 2 + Math.random() * 2;
+      size[i] = 0.035 + Math.random() * 0.03;
       alpha[i] = 0.25 + Math.random() * 0.35;
       col[i * 3] = ash[0];
       col[i * 3 + 1] = ash[1];

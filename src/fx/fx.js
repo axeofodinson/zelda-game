@@ -29,6 +29,7 @@ export class FX {
       sparks: new Pool(500, { gravity: -14, drag: 0.2, emissive: true }),
       drips: new Pool(400, { gravity: -9, emissive: true }),
       flakes: new Pool(400, { gravity: -2.5, drag: 1.2 }),
+      glass: new Pool(500, { gravity: -10, drag: 0.4, emissive: true }),
     };
     for (const p of Object.values(this.pools)) scene.add(p.points);
 
@@ -47,25 +48,26 @@ export class FX {
         y: 0.06 + Math.random() * 0.1,
         z: pos.z + (Math.random() * 2 - 1) * 0.12,
         vx: Math.cos(ang) * spd, vy: 0.5 + Math.random() * 0.6, vz: Math.sin(ang) * spd,
-        life: 0.4 + Math.random() * 0.3, size: 5 + Math.random() * 4,
-        color: [ash[0] * 0.95, ash[1] * 0.92, ash[2] * 0.88],
+        life: 0.4 + Math.random() * 0.3, size: 0.12 + Math.random() * 0.1,
+        color: [ash[0] * 0.95, ash[1] * 0.92, ash[2] * 0.88], alpha: 0.7,
       });
     }
   }
 
   // §6 steam burst — THE signature. Cold iron on hot bronze: a fat white puff,
   // verdigris-tinted, expands + rises + dissipates over ~900ms. Every quench.
-  steamBurst(pos, count = 8) {
+  steamBurst(pos, count = 6) {
     for (let i = 0; i < count; i++) {
       const ang = Math.random() * Math.PI * 2;
-      const spd = 0.3 + Math.random() * 0.9;
+      const spd = 0.3 + Math.random() * 0.8;
       this.pools.steam.spawn({
         x: pos.x + (Math.random() * 2 - 1) * 0.15,
         y: pos.y + (Math.random() * 2 - 1) * 0.15,
         z: pos.z + (Math.random() * 2 - 1) * 0.15,
-        vx: Math.cos(ang) * spd, vy: 0.7 + Math.random() * 0.6, vz: Math.sin(ang) * spd,
-        life: 0.6 + Math.random() * 0.3, size: 4 + Math.random() * 4,
-        color: [0.52, 0.66, 0.6], // teal-grey quench steam, not white
+        vx: Math.cos(ang) * spd, vy: 0.6 + Math.random() * 0.5, vz: Math.sin(ang) * spd,
+        life: 0.5 + Math.random() * 0.3, size: 0.22 + Math.random() * 0.18,
+        color: [0.5, 0.58, 0.55], // wispy grey-teal quench steam
+        alpha: 0.5,
       });
     }
   }
@@ -81,8 +83,8 @@ export class FX {
       this.pools.sparks.spawn({
         x: pos.x, y: pos.y, z: pos.z,
         vx, vy: 2 + Math.random() * 4, vz,
-        life: 0.2 + Math.random() * 0.15, size: 3 + Math.random() * 2,
-        color: [s[0], s[1] * 0.9, s[2] * 0.7],
+        life: 0.18 + Math.random() * 0.12, size: 0.05 + Math.random() * 0.04,
+        color: [s[0], s[1] * 0.9, s[2] * 0.7], alpha: 0.85,
       });
     }
   }
@@ -117,8 +119,22 @@ export class FX {
         y: pos.y + Math.random() * 1.2,
         z: pos.z + (Math.random() * 2 - 1) * 0.3,
         vx: Math.cos(ang) * spd, vy: 1.5 + Math.random() * 1.5, vz: Math.sin(ang) * spd,
-        life: 0.8 + Math.random() * 0.6, size: 4 + Math.random() * 3,
+        life: 0.8 + Math.random() * 0.6, size: 0.06 + Math.random() * 0.04,
         color: [v[0], v[1], v[2]],
+      });
+    }
+  }
+
+  // §6 glass shards — slag glass + Flashling deaths. Sharp, spinning, catch light.
+  glassShards(pos, count = 14, tint = null) {
+    const c = tint || [RGB.verdigris[0], RGB.verdigris[1] + 0.2, RGB.verdigris[2] + 0.1];
+    for (let i = 0; i < count; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const spd = 1.5 + Math.random() * 3.5;
+      this.pools.glass.spawn({
+        x: pos.x, y: pos.y, z: pos.z,
+        vx: Math.cos(ang) * spd, vy: 1 + Math.random() * 3, vz: Math.sin(ang) * spd,
+        life: 0.3 + Math.random() * 0.3, size: 0.05 + Math.random() * 0.04, color: c, alpha: 0.9,
       });
     }
   }

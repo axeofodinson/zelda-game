@@ -41,8 +41,39 @@ export class Tinn {
     this._lastStep = 0;
     this.combat = null;
     this.keepFacing = false; // true during locked hops (face target, not motion)
+    this.platforms = null;
+    this.vy = 0;
+    this._prevX = 0;
+    this._prevZ = 0;
 
     this._build();
+  }
+
+  // Step up onto low standable geometry (statues), fall off edges, be blocked
+  // by tall walls. The basin floor is y=0.
+  _resolveVertical(dt) {
+    const step = 0.8;
+    let x = this.root.position.x;
+    let z = this.root.position.z;
+    if (this.platforms && this.platforms.blockedAt(x, z, this.root.position.y, step)) {
+      this.root.position.x = this._prevX;
+      this.root.position.z = this._prevZ;
+      x = this._prevX;
+      z = this._prevZ;
+      this.velocity.multiplyScalar(0.2);
+    }
+    const g = this.platforms ? this.platforms.heightAt(x, z) : 0;
+    if (this.root.position.y > g + 0.02) {
+      this.vy -= 22 * dt;
+      this.root.position.y += this.vy * dt;
+      if (this.root.position.y <= g) {
+        this.root.position.y = g;
+        this.vy = 0;
+      }
+    } else {
+      this.root.position.y = g;
+      this.vy = 0;
+    }
   }
 
   setCombat(c) {
@@ -157,6 +188,9 @@ export class Tinn {
     this.time += dt;
     this.prevYaw = this.root.rotation.y;
     const { basis, fx, heat, lockon } = ctx;
+    if (ctx.platforms) this.platforms = ctx.platforms;
+    this._prevX = this.root.position.x;
+    this._prevZ = this.root.position.z;
 
     // Roll (Space) interrupts anything — the i-frame dodge out (§5).
     if (this.state !== 'roll' && input.wasPressed(' ')) {
@@ -178,6 +212,7 @@ export class Tinn {
       this._updateGround(dt, input, basis, fx, lockon, heat);
     }
 
+    if (this.state !== 'attack') this._resolveVertical(dt);
     this._updateBlade(heat);
     this.turnRate = shortestAngle(this.root.rotation.y - this.prevYaw) / Math.max(dt, 1e-4);
     this._animate(dt, fx, heat);
@@ -208,7 +243,6 @@ export class Tinn {
     this.velocity.y = 0;
 
     this.root.position.addScaledVector(this.velocity, dt);
-    this.root.position.y = 0;
     this.speed = this.velocity.length();
 
     if (locked) {
@@ -247,7 +281,7 @@ export class Tinn {
       const off = Math.random() > 0.5 ? 0.22 : -0.22;
       fx.pools.drips?.spawn?.({
         x: this.root.position.x + off, y: 0.5 + Math.random() * 0.4, z: this.root.position.z + 0.1,
-        vx: 0, vy: -0.2, vz: 0, life: 0.7, size: 4, color: [_molten[0], _molten[1], _molten[2]],
+        vx: 0, vy: -0.2, vz: 0, life: 0.7, size: 0.08, color: [_molten[0], _molten[1], _molten[2]],
       });
     }
   }
@@ -281,7 +315,6 @@ export class Tinn {
     const spd = MOVE.rollSpeed * (1 - MathUtils.smoothstep(t, 0.15, 1.0));
     this.velocity.copy(this.rollDir).multiplyScalar(spd);
     this.root.position.addScaledVector(this.velocity, dt);
-    this.root.position.y = 0;
     this.speed = spd;
 
     const ms = this.rollTime * 1000;

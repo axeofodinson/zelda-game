@@ -20,6 +20,10 @@ export class Enemy {
     this.flash = 0; // impact-flash timer (s)
     this.dead = false; // reached heat 0
     this.toppleT = 0;
+    this.staggerMs = 0;
+    this.standSize = { w: 1.2, d: 1.2, h: 0.5 }; // statue footprint (subclass sets)
+    this.noStatue = false; // swarm enemies shatter instead of toppling
+    this._platform = null;
     this.cores = []; // { mat } emissive materials tracking heat
     this.coolable = []; // { offset:Vector3, r } spheres where cooling lands
     this.armored = []; // { offset:Vector3, r } spheres that clang (Crucible)
@@ -87,20 +91,39 @@ export class Enemy {
     return this.dead && this.toppleT > 0.6;
   }
 
-  update(dt) {
+  _registerStatue(platforms) {
+    const p = this.position;
+    const hw = this.standSize.w / 2;
+    const hd = this.standSize.d / 2;
+    this._platform = platforms.add({
+      minX: p.x - hw, maxX: p.x + hw,
+      minZ: p.z - hd, maxZ: p.z + hd,
+      top: this.standSize.h, tag: 'statue',
+    });
+  }
+
+  // ctx: { dt, tinn, heat, fx, runnelAt, platforms, hurtTinn, playerPos, runnels }
+  update(ctx) {
+    const dt = ctx.dt;
     if (this.flash > 0) this.flash = Math.max(0, this.flash - dt);
+    if (this.staggerMs > 0) this.staggerMs = Math.max(0, this.staggerMs - dt * 1000);
 
     if (!this.dead) {
       this.timeSinceHit += dt;
-      if (this.timeSinceHit >= ENEMY.reheatDelay) {
+      const inRunnel = ctx.runnelAt && ctx.runnelAt(this.position.x, this.position.z);
+      if (inRunnel) {
+        this.heat = Math.min(this.maxHeat, this.heat + ENEMY.runnelReheatPerSec * dt);
+      } else if (this.timeSinceHit >= ENEMY.reheatDelay) {
         this.heat = Math.min(this.maxHeat, this.heat + ENEMY.reheatPerSec * dt);
       }
-    } else if (this.toppleT < 1) {
+      if (this.staggerMs <= 0) this.think?.(ctx);
+    } else if (!this.noStatue && this.toppleT < 1) {
       this.toppleT = Math.min(1, this.toppleT + dt / 0.7);
-      // fall over: pitch to 90° with a little overshoot handled by easing
       const e = 1 - Math.pow(1 - this.toppleT, 3);
       this.root.rotation.x = e * (Math.PI / 2);
-      this.root.position.y = Math.max(0, this.root.position.y); // keep grounded
+      if (this.toppleT >= 0.6 && !this._platform && ctx.platforms) {
+        this._registerStatue(ctx.platforms);
+      }
     }
 
     // Drive core colour/emissive: hot=molten, cold/brittle=verdigris, flash=sear.

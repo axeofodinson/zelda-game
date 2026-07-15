@@ -5,6 +5,7 @@ import {
   Color,
   ColorManagement,
   LinearSRGBColorSpace,
+  Vector3,
 } from 'three';
 ColorManagement.enabled = false;
 import { Pipeline } from './render/pipeline.js';
@@ -12,7 +13,8 @@ import { uploadLights } from './render/n64material.js';
 import { RGB } from './render/palette.js';
 import { CAMERA } from './config/feel.js';
 import { MELT } from './config/heat.js';
-import { buildGreybox } from './world/greybox.js';
+import { Basin } from './world/basin.js';
+import { Platforms } from './systems/platforms.js';
 import { Input } from './systems/input.js';
 import { CameraRig } from './systems/camera.js';
 import { Tinn } from './actors/tinn.js';
@@ -21,7 +23,11 @@ import { FX } from './fx/fx.js';
 import { TinnHeat } from './systems/heat.js';
 import { LockOn } from './systems/lockon.js';
 import { Combat } from './systems/combat.js';
-import { Dummy } from './actors/enemies/dummy.js';
+import { Flasks } from './systems/flask.js';
+import { Cull } from './actors/enemies/cull.js';
+import { Sprue } from './actors/enemies/sprue.js';
+import { Flashling } from './actors/enemies/flashling.js';
+import { Crucible } from './actors/enemies/crucible.js';
 
 const canvas = document.getElementById('app');
 const params = new URLSearchParams(location.search);
@@ -37,51 +43,53 @@ scene.background = null;
 const camera = new PerspectiveCamera(CAMERA.fov, 1, 0.1, 90);
 const pipeline = new Pipeline(renderer);
 
-const { root: world, colliders } = buildGreybox();
-scene.add(world);
+const platforms = new Platforms();
+const basin = new Basin(platforms);
+scene.add(basin.root);
 
 const fx = new FX(scene);
 const input = new Input(canvas);
 const cameraRig = new CameraRig(camera);
-cameraRig.setColliders(colliders);
+cameraRig.setColliders(basin.colliders);
 
 const heat = new TinnHeat();
 const tinn = new Tinn();
 tinn.addToScene(scene);
 const knell = new Knell();
 knell.addToScene(scene);
+const flasks = new Flasks(scene);
 
-// Enemies — a couple of training dummies that report heat by their glow.
-const enemies = [new Dummy([0, 0, -6], 80), new Dummy([4, 0, -9], 80)];
+// The Unfinished — one of each + a small Flashling swarm.
+const enemies = [
+  new Cull([-4, 0, -8]),
+  new Sprue([8, 0, -16]),
+  new Crucible([-2, 0, -14]),
+];
+for (let i = 0; i < 6; i++) enemies.push(new Flashling([3 + i * 0.4, 1.6, -6], (i / 6) * Math.PI * 2));
 for (const e of enemies) scene.add(e.root);
 const getEnemies = () => enemies;
 
-const lockon = new LockOn(getEnemies, { range: 15 });
+const lockon = new LockOn(getEnemies, { range: 16 });
 
-// ---- feel hooks (§8) — hitstop + kill slowmo + shake + punch ----------------
-let hitstopUntil = 0;
-let slowUntil = 0;
-let slowEaseUntil = 0;
+// ---- feel hooks -------------------------------------------------------------
+let hitstopUntil = 0, slowUntil = 0, slowEaseUntil = 0;
 const feel = {
   shake: (m) => cameraRig.addShake(m),
   punch: () => cameraRig.punch(),
   hitstop: (ms) => { hitstopUntil = Math.max(hitstopUntil, performance.now() + ms); },
   tink: () => {},
-  onKill: (e) => {
-    fx.verdigrisFlakes(e.position);
-    slowUntil = performance.now() + 200;
-    slowEaseUntil = slowUntil + 300;
-  },
+  onKill: (e) => { fx.verdigrisFlakes(e.position); slowUntil = performance.now() + 200; slowEaseUntil = slowUntil + 300; },
 };
 
 const combat = new Combat({ tinn, heat, fx, getEnemies, lockon, feel });
 tinn.setCombat(combat);
 
-// ---- fixed-timestep loop ----------------------------------------------------
+const hurtTinn = (amt) => { if (!tinn.invuln) heat.hurt(amt); };
+
+// ---- loop -------------------------------------------------------------------
 const STEP = 1 / 60;
-let acc = 0;
-let last = performance.now() / 1000;
-let demoT = 0, demoAtk = 0;
+let acc = 0, last = performance.now() / 1000;
+let demoAtk = 0;
 
 function timeScaleNow() {
   const now = performance.now();
@@ -90,16 +98,44 @@ function timeScaleNow() {
   return 1;
 }
 
+function respawnIfMelted() {
+  if (heat.melt >= MELT.max) {
+    const s = basin.nearestSpawn(tinn.position);
+    tinn.root.position.set(s.x, 0, s.z);
+    tinn.velocity.set(0, 0, 0);
+    heat.melt = 0;
+    heat.blade = 0;
+    heat.timeSinceHit = 0;
+  }
+}
+
 function fixedUpdate(dt) {
   lockon.update(input.lockHeld, tinn.position);
   const basis = cameraRig.groundBasis();
-  tinn.update(dt, input, { basis, fx, heat, lockon });
-  heat.update(dt, {}); // env hazards arrive in Phase 3
-  for (const e of enemies) e.update(dt);
+  tinn.update(dt, input, { basis, fx, heat, lockon, platforms });
+
+  if (input.wasPressed('1')) {
+    const dir = new Vector3(Math.sin(tinn.root.rotation.y), 0, Math.cos(tinn.root.rotation.y));
+    flasks.throw(new Vector3(tinn.position.x, 1.0, tinn.position.z), dir);
+  }
+
+  const env = basin.envAt(tinn.position.x, tinn.position.z);
+  heat.update(dt, env);
+  respawnIfMelted();
+
+  const ectx = {
+    dt, tinn, fx, feel, playerPos: tinn.position,
+    runnelAt: (x, z) => basin.runnelAt(x, z),
+    runnels: basin.runnels, platforms,
+    hurtTinn, addHandprint: (x, z) => basin.addHandprint(x, z),
+    getEnemies,
+  };
+  for (const e of enemies) e.update(ectx);
+  basin.update(dt);
+  flasks.update(dt, { fx, feel, getEnemies, playerPos: tinn.position, hurtTinn });
+
   const shoulder = tinn.position.clone();
   shoulder.y += 1.1;
-  shoulder.x += Math.sin(tinn.root.rotation.y) * -0.3 + Math.cos(tinn.root.rotation.y) * 0.35;
-  shoulder.z += Math.cos(tinn.root.rotation.y) * -0.3 - Math.sin(tinn.root.rotation.y) * 0.35;
   const lockT = lockon.active ? lockon.target : null;
   knell.update(dt, shoulder, lockT, lockT ? lockT.glow : 0);
   cameraRig.update(dt, tinn.position, tinn.velocity, lockT ? lockT.position : null);
@@ -107,72 +143,65 @@ function fixedUpdate(dt) {
 }
 
 function driveDemo(elapsed) {
-  demoT += elapsed;
   demoAtk += elapsed;
-  input.down.add('shift'); // hold lock
-  const d = enemies[0];
-  const toE = d.position.clone().sub(tinn.position); toE.y = 0;
-  const dist = toE.length();
-  if (dist > 2.4) {
+  input.down.add('shift');
+  const live = enemies.filter((e) => !e.dead);
+  if (!live.length) { input.move.set(0, 0); return; }
+  let near = live[0], nd = Infinity;
+  for (const e of live) { const d = e.position.distanceTo(tinn.position); if (d < nd) { nd = d; near = e; } }
+  if (nd > 2.6) {
     const basis = cameraRig.groundBasis();
-    // move toward the dummy in camera-relative space
-    const f = basis.forward, r = basis.right;
-    input.move.set(toE.dot(r) > 0 ? 0.4 : -0.4, 0.9);
+    const to = near.position.clone().sub(tinn.position); to.y = 0;
+    input.move.set(to.dot(basis.right) > 0 ? 0.5 : -0.5, 0.9);
   } else {
     input.move.set(0, 0);
-    if (demoAtk > 0.42 && combat.state === 'idle') {
-      demoAtk = 0;
-      if (heat.blade >= 80) combat.forceVent();
-      else combat.forceSlash();
-    }
+    if (demoAtk > 0.7 && combat.state === 'idle') { demoAtk = 0; heat.blade >= 82 ? combat.forceVent() : combat.forceSlash(); }
   }
 }
 
 function frame() {
   const now = performance.now() / 1000;
-  let elapsed = now - last;
-  last = now;
+  let elapsed = now - last; last = now;
   if (elapsed > 0.25) elapsed = 0.25;
-
-  if (DEMO) driveDemo(elapsed);
-  else input.begin();
+  if (DEMO) driveDemo(elapsed); else input.begin();
   cameraRig.applyLook(input.mouse);
 
-  const frozen = performance.now() < hitstopUntil;
-  if (!frozen) {
+  if (performance.now() >= hitstopUntil) {
     acc += elapsed * timeScaleNow();
     while (acc >= STEP) { fixedUpdate(STEP); acc -= STEP; }
   }
   input.end();
 
-  // Melt desaturation toward molten (§3.2 Failing).
   const mf = heat.meltFactor;
   pipeline.postMat.uniforms.uDesat.value = Math.max(0, Math.min(1, (mf - MELT.failingAt / 100) / 0.15));
-
   uploadLights(camera.position);
   pipeline.render(scene, camera);
   requestAnimationFrame(frame);
 }
 
 function resize() {
-  const w = canvas.clientWidth || innerWidth;
-  const h = canvas.clientHeight || innerHeight;
+  const w = canvas.clientWidth || innerWidth, h = canvas.clientHeight || innerHeight;
   renderer.setSize(w, h, false);
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
+  camera.aspect = w / h; camera.updateProjectionMatrix();
 }
-addEventListener('resize', resize);
-resize();
+addEventListener('resize', resize); resize();
 addEventListener('keydown', (e) => { if (e.key === 'f' || e.key === 'F') pipeline.toggleResolution(); });
 
-// Debug hooks for the verification gate.
 window.__CINDERCAST__ = {
-  ready: true, tinn, cameraRig, combat, heat, enemies, fx, pipeline, lockon,
+  ready: true, tinn, cameraRig, combat, heat, enemies, fx, pipeline, lockon, basin, platforms,
   setBlade: (v) => (heat.blade = v),
   forceVent: () => combat.forceVent(),
   forceSlash: () => combat.forceSlash(),
-  placeAtDummy: () => { tinn.root.position.set(0, 0, -3.6); tinn.root.rotation.y = Math.PI; },
   overhead: (h) => cameraRig.setOverhead(h),
-  dummyHeat: () => enemies[0].heat,
+  killEnemy: (i) => { const e = enemies[i]; if (e && !e.dead) e.cool(e.heat + 999); },
+  standOn: (i) => {
+    const e = enemies[i];
+    tinn.root.position.set(e.position.x, 3, e.position.z);
+    return { enemyTop: e.standSize.h };
+  },
+  tinnY: () => tinn.root.position.y,
+  detonateFlask: (x, z) =>
+    flasks._detonate(new Vector3(x, 0.4, z), { fx, feel, getEnemies, playerPos: tinn.position, hurtTinn }),
+  exposeCrucible: (i) => { const e = enemies[i]; e.mode = 'stunned'; e.mt = 0; e.exposed = true; e.coolable = [e._topSphere]; },
 };
 requestAnimationFrame(frame);
