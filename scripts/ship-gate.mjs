@@ -32,6 +32,7 @@ async function main() {
   page.on('pageerror', (e) => errs.push(e.message));
 
   await page.goto(FILE_URL, { waitUntil: 'load' });
+  await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'x' }))); // dismiss start card
   await sleep(3000);
 
   const a = await page.screenshot();
