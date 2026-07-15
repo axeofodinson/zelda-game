@@ -24,6 +24,8 @@ import { TinnHeat } from './systems/heat.js';
 import { LockOn } from './systems/lockon.js';
 import { Combat } from './systems/combat.js';
 import { Flasks } from './systems/flask.js';
+import { Audio } from './audio/ambience.js';
+import { bellCentroid, bellParams } from './audio/bell.js';
 import { Cull } from './actors/enemies/cull.js';
 import { Sprue } from './actors/enemies/sprue.js';
 import { Flashling } from './actors/enemies/flashling.js';
@@ -81,10 +83,19 @@ const feel = {
   onKill: (e) => { fx.verdigrisFlakes(e.position); slowUntil = performance.now() + 200; slowEaseUntil = slowUntil + 300; },
 };
 
+const audio = new Audio();
+feel.clang = () => audio.clang();
+feel.tink = () => audio.tink();
+const startAudio = () => audio.start();
+addEventListener('keydown', startAudio, { once: true });
+addEventListener('pointerdown', startAudio, { once: true });
+
 const combat = new Combat({ tinn, heat, fx, getEnemies, lockon, feel });
 tinn.setCombat(combat);
 
 const hurtTinn = (amt) => { if (!tinn.invuln) heat.hurt(amt); };
+const initialHeat = enemies.reduce((s, e) => s + e.maxHeat, 0);
+let prevTarget = null;
 
 // ---- loop -------------------------------------------------------------------
 const STEP = 1 / 60;
@@ -132,12 +143,26 @@ function fixedUpdate(dt) {
   };
   for (const e of enemies) e.update(ectx);
   basin.update(dt);
+  basin.emitEmbers(fx);
   flasks.update(dt, { fx, feel, getEnemies, playerPos: tinn.position, hurtTinn });
 
   const shoulder = tinn.position.clone();
   shoulder.y += 1.1;
   const lockT = lockon.active ? lockon.target : null;
   knell.update(dt, shoulder, lockT, lockT ? lockT.glow : 0);
+
+  // Knell rings + sounds at the locked target; pitch tracks its heat (§7).
+  if (lockT) {
+    if (lockT !== prevTarget) {
+      fx.knellRing({ x: lockT.position.x, y: lockT.position.y + 1.4, z: lockT.position.z });
+      audio.ring(lockT.glow, true);
+    } else {
+      audio.ring(lockT.glow); // throttled inside; you hear it cool as you slash
+    }
+  }
+  prevTarget = lockT;
+  const totalHeat = enemies.reduce((s, e) => s + (e.dead ? 0 : e.heat), 0);
+  audio.setTension(initialHeat ? totalHeat / initialHeat : 0);
   cameraRig.update(dt, tinn.position, tinn.velocity, lockT ? lockT.position : null);
   fx.update(dt, camera.position);
 }
@@ -203,5 +228,8 @@ window.__CINDERCAST__ = {
   detonateFlask: (x, z) =>
     flasks._detonate(new Vector3(x, 0.4, z), { fx, feel, getEnemies, playerPos: tinn.position, hurtTinn }),
   exposeCrucible: (i) => { const e = enemies[i]; e.mode = 'stunned'; e.mt = 0; e.exposed = true; e.coolable = [e._topSphere]; },
+  audio,
+  bellCentroid,
+  bellParams,
 };
 requestAnimationFrame(frame);

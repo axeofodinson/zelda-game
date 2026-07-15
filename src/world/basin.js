@@ -129,6 +129,18 @@ export class Basin {
     this._handprints.push({ x, z, r: 0.8, t: 0, mesh: m, mat });
   }
 
+  // §6 ember motes rising from the runnels — ambient, light the fog.
+  emitEmbers(fx) {
+    for (const r of this._runnelRects) {
+      if (Math.random() < 0.4) {
+        fx.emberMote(
+          r.minX + Math.random() * (r.maxX - r.minX),
+          r.minZ + Math.random() * (r.maxZ - r.minZ)
+        );
+      }
+    }
+  }
+
   update(dt) {
     for (let i = this._handprints.length - 1; i >= 0; i--) {
       const h = this._handprints[i];

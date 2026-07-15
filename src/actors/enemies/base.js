@@ -117,6 +117,16 @@ export class Enemy {
         this.heat = Math.min(this.maxHeat, this.heat + ENEMY.reheatPerSec * dt);
       }
       if (this.staggerMs <= 0) this.think?.(ctx);
+      // Molten drips — hot enemies, always (§6). Fall from a core.
+      if (ctx.fx && this.glow > 0.35 && Math.random() < this.glow * 0.12) {
+        ctx.fx.pools.drips?.spawn?.({
+          x: this.position.x + (Math.random() * 2 - 1) * 0.3,
+          y: 0.9 + Math.random() * 0.7,
+          z: this.position.z + (Math.random() * 2 - 1) * 0.3,
+          vx: 0, vy: -0.5, vz: 0, life: 0.6, size: 0.06,
+          color: [1, 0.42, 0.1], alpha: 0.9,
+        });
+      }
     } else if (!this.noStatue && this.toppleT < 1) {
       this.toppleT = Math.min(1, this.toppleT + dt / 0.7);
       const e = 1 - Math.pow(1 - this.toppleT, 3);

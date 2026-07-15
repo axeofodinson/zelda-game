@@ -30,10 +30,12 @@ export class FX {
       drips: new Pool(400, { gravity: -9, emissive: true }),
       flakes: new Pool(400, { gravity: -2.5, drag: 1.2 }),
       glass: new Pool(500, { gravity: -10, drag: 0.4, emissive: true }),
+      embers: new Pool(500, { gravity: 0.5, drag: 0.6, emissive: true }),
     };
     for (const p of Object.values(this.pools)) scene.add(p.points);
 
-    this._rings = this._makeRings(6);
+    // §6 vent ring (thick, verdigris) + Knell's ring (thin, sear, wireframe-ish).
+    this._rings = [...this._makeRings(6, 0.82, 'vent'), ...this._makeRings(4, 0.955, 'knell')];
     for (const r of this._rings) scene.add(r.mesh);
   }
 
@@ -91,11 +93,14 @@ export class FX {
 
   // §6 vent ring — expanding steam+sparks; radius MUST match the hitbox (§4).
   ventRing(pos, radius) {
-    const r = this._rings.find((x) => !x.active);
+    const r = this._rings.find((x) => x.kind === 'vent' && !x.active);
     if (r) {
       r.active = true;
       r.t = 0;
       r.radius = radius;
+      r.life = 0.5; r.expand = 0.28; r.peak = 0.8;
+      r.mat.uniforms.uColor.value.set(...RGB.verdigris);
+      r.mesh.rotation.x = -Math.PI / 2;
       r.mesh.position.set(pos.x, 0.08, pos.z);
       r.mesh.visible = true;
     }
@@ -139,7 +144,36 @@ export class FX {
     }
   }
 
-  _makeRings(n) {
+  // §6 Knell's ring — sound made visible. Two thin --sear rings offset 80ms, on
+  // lock-on / Knell throw.
+  knellRing(pos, radius = 1.6) {
+    const free = this._rings.filter((r) => r.kind === 'knell' && !r.active).slice(0, 2);
+    free.forEach((r, i) => {
+      r.active = true;
+      r.t = -i * 0.08; // second ring lags 80ms
+      r.radius = radius;
+      r.life = 0.4;
+      r.expand = 0.22;
+      r.peak = 0.9;
+      r.mat.uniforms.uColor.value.set(...RGB.sear);
+      r.mesh.position.set(pos.x, pos.y ?? 1.4, pos.z);
+      r.mesh.rotation.x = 0; // face-ish camera (vertical ring around the target)
+      r.mesh.visible = true;
+    });
+  }
+
+  // §6 ember motes — rise slowly from runnels, light the fog. Ambient.
+  emberMote(x, z) {
+    const m = RGB.molten;
+    this.pools.embers.spawn({
+      x: x + (Math.random() * 2 - 1) * 0.9, y: 0.1, z: z + (Math.random() * 2 - 1) * 0.9,
+      vx: (Math.random() * 2 - 1) * 0.15, vy: 0.6 + Math.random() * 0.5, vz: (Math.random() * 2 - 1) * 0.15,
+      life: 1.5 + Math.random() * 1.5, size: 0.03 + Math.random() * 0.03,
+      color: [m[0], m[1] * 0.8, m[2] * 0.6], alpha: 0.8,
+    });
+  }
+
+  _makeRings(n, inner, kind) {
     const rings = [];
     for (let i = 0; i < n; i++) {
       const mat = new ShaderMaterial({
@@ -153,10 +187,10 @@ export class FX {
         fragmentShader: `precision mediump float; uniform float uAlpha; uniform vec3 uColor; uniform vec3 uFogColor; uniform float uFogDensity; varying float vFog;
           void main(){ float f=uFogDensity*vFog; float fog=clamp(1.0-exp(-f*f),0.0,1.0); vec3 c=mix(uColor,uFogColor,fog); gl_FragColor=vec4(c,uAlpha); }`,
       });
-      const mesh = new Mesh(new RingGeometry(0.82, 1.0, 40), mat);
+      const mesh = new Mesh(new RingGeometry(inner, 1.0, 44), mat);
       mesh.rotation.x = -Math.PI / 2;
       mesh.visible = false;
-      rings.push({ mesh, mat, active: false, t: 0, radius: 1 });
+      rings.push({ mesh, mat, kind, active: false, t: 0, radius: 1, life: 0.5, expand: 0.28, peak: 0.8 });
     }
     return rings;
   }
@@ -167,12 +201,13 @@ export class FX {
     for (const r of this._rings) {
       if (!r.active) continue;
       r.t += dt;
-      const life = 0.5;
-      const grow = Math.min(r.t / 0.28, 1);
-      const rad = r.radius * (grow * grow * (3 - 2 * grow)); // ease to exact radius
-      r.mesh.scale.set(Math.max(rad, 0.001), 1, Math.max(rad, 0.001));
-      r.mat.uniforms.uAlpha.value = Math.max(0, 1 - r.t / life) * 0.8;
-      if (r.t >= life) { r.active = false; r.mesh.visible = false; }
+      if (r.t < 0) { r.mesh.visible = false; continue; }
+      r.mesh.visible = true;
+      const grow = Math.min(r.t / r.expand, 1);
+      const rad = r.radius * (grow * grow * (3 - 2 * grow));
+      r.mesh.scale.set(Math.max(rad, 0.001), Math.max(rad, 0.001), Math.max(rad, 0.001));
+      r.mat.uniforms.uAlpha.value = Math.max(0, 1 - r.t / r.life) * r.peak;
+      if (r.t >= r.life) { r.active = false; r.mesh.visible = false; }
     }
   }
 }

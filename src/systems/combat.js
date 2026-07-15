@@ -169,6 +169,7 @@ export class Combat {
         // armored body: clang, sparks, knockback, no cooling (Crucible teach).
         this.fx.sparks({ x: _hit.x, y: 1.0, z: _hit.z }, 14, _dir);
         this.feel.shake?.(0.05);
+        this.feel.clang?.();
         this.hitSet.add(e);
         landed = true;
         this.tinn.knockback?.(_dir.clone().multiplyScalar(-2));
