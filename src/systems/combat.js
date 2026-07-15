@@ -118,6 +118,7 @@ export class Combat {
     this.moveDur = this.frames.windup + this.frames.active + this.frames.recovery;
     // Face the target (locked) or camera forward on swing start.
     this._orientToAttack();
+    this.feel.swing?.(); // never a silent input (§8)
   }
 
   _orientToAttack() {
@@ -162,7 +163,8 @@ export class Combat {
         this.hitSet.add(e);
         landed = true;
         this.fx.steamBurst({ x: _hit.x, y: 1.0, z: _hit.z });
-        this.feel.hitstop?.(res.killed ? 90 : 60);
+        // §8 hitstop: light 60, Slash 3 90, kill 180.
+        this.feel.hitstop?.(res.killed ? 180 : this.step === 2 ? 90 : 60);
         this.feel.shake?.(0.04);
         if (res.killed) this.feel.onKill?.(e);
       } else if (this._overlaps(e.armorSpheres(), _hit, radius)) {
@@ -250,6 +252,7 @@ export class Combat {
     this.moveDur = FRAMES.plunge.windup + FRAMES.plunge.active + FRAMES.plunge.recovery;
     this._orientToAttack();
     this.tinn.invuln = true; // i-frames during the rise
+    this.tinn.setSquash?.(1.12); // stretch on the rise (§8)
   }
 
   _plunge(ms) {
@@ -282,6 +285,7 @@ export class Combat {
       this.fx.ashPuff(this.tinn.position, 10);
       this.feel.shake?.(0.18);
       this.feel.hitstop?.(120);
+      this.tinn.setSquash?.(0.88); // squash on landing (§8)
       if (landed) this.heat.addBlade(BLADE.plunge.blade);
     }
     if (this.t >= this.moveDur) {

@@ -61,4 +61,5 @@ export class Audio {
   clang() { this.synth.clang(300, 0.18, 0.22); }
   thump() { this.synth.thump(0.4); }
   tink() { this.synth.clang(1400, 0.05, 0.1); }
+  swing() { this.synth.noise(0.09, 1100, 1.4, 0.05); }
 }

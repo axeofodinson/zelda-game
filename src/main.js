@@ -93,6 +93,8 @@ const feel = {
 const audio = new Audio();
 feel.clang = () => audio.clang();
 feel.tink = () => audio.tink();
+feel.swing = () => audio.swing();
+feel.steam = () => audio.steam();
 const startAudio = () => audio.start();
 addEventListener('keydown', startAudio, { once: true });
 addEventListener('pointerdown', startAudio, { once: true });
@@ -245,5 +247,13 @@ window.__CINDERCAST__ = {
   audio,
   bellCentroid,
   bellParams,
+  feelState: () => ({
+    hitstop: performance.now() < hitstopUntil,
+    slow: timeScaleNow() < 1,
+    timeScale: timeScaleNow(),
+    squashY: tinn.squashY,
+  }),
+  triggerHitstop: (ms) => feel.hitstop(ms),
+  triggerKillSlow: () => feel.onKill(enemies.find((e) => !e.dead) || enemies[0]),
 };
 requestAnimationFrame(frame);

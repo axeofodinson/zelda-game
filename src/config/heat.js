@@ -10,7 +10,12 @@
 export const BLADE = {
   slash1: { blade: +18, enemy: -14 },
   slash2: { blade: +18, enemy: -14 },
-  slash3: { blade: +26, enemy: -22 },
+  // PHASE 6 RETUNE: slash3 blade cost 26 -> 20. At 26 a fresh full combo
+  // (18+18+26=62) plus any prior heat pushed you across searing (85) mid-way
+  // through the uncancelable finisher — the combo punished its own finish.
+  // At 20 a full combo tops out at 56, so entering searing is a deliberate
+  // second-combo choice. Enemy cooling (-22) is unchanged, so TTK is unchanged.
+  slash3: { blade: +20, enemy: -22 },
   plunge: { blade: +34, enemy: -70 },
   wardAbsorb: { blade: +25, enemy: 0 },
   quenchPoolPerSec: -40,

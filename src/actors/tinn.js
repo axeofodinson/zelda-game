@@ -45,8 +45,14 @@ export class Tinn {
     this.vy = 0;
     this._prevX = 0;
     this._prevZ = 0;
+    this.squashY = 1; // §8 squash & stretch (eases back to 1)
 
     this._build();
+  }
+
+  // §8: 1.12 stretch on a plunge rise, 0.88 squash on landing, recover ~180ms.
+  setSquash(v) {
+    this.squashY = v;
   }
 
   // Step up onto low standable geometry (statues), fall off edges, be blocked
@@ -274,8 +280,12 @@ export class Tinn {
 
   _updateMelt(heat, fx) {
     const m = heat?.meltFactor || 0;
-    // Geometric sag: squash down and spread as he softens/puddles.
-    this.root.scale.set(1 + m * 0.14, 1 - m * 0.28, 1 + m * 0.14);
+    // Recover squash/stretch toward 1 over ~180ms, volume-preserving.
+    this.squashY += (1 - this.squashY) * (1 - Math.exp(-(1 / 60) / 0.06));
+    const sy = this.squashY;
+    const sxz = 1 / Math.sqrt(Math.max(sy, 0.05));
+    // Geometric melt sag combined with squash & stretch.
+    this.root.scale.set((1 + m * 0.14) * sxz, (1 - m * 0.28) * sy, (1 + m * 0.14) * sxz);
     // Drip particles once he's Running/Failing.
     if (m > 0.6 && fx && Math.random() < (m - 0.6) * 0.8) {
       const off = Math.random() > 0.5 ? 0.22 : -0.22;
