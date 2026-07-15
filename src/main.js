@@ -30,10 +30,13 @@ import { Cull } from './actors/enemies/cull.js';
 import { Sprue } from './actors/enemies/sprue.js';
 import { Flashling } from './actors/enemies/flashling.js';
 import { Crucible } from './actors/enemies/crucible.js';
+import { OrantArena } from './world/orant_arena.js';
+import { Orant } from './actors/enemies/orant.js';
 
 const canvas = document.getElementById('app');
 const params = new URLSearchParams(location.search);
 const DEMO = params.has('demo');
+const BOSS = params.has('boss');
 
 const renderer = new WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
 renderer.setPixelRatio(1);
@@ -46,13 +49,13 @@ const camera = new PerspectiveCamera(CAMERA.fov, 1, 0.1, 90);
 const pipeline = new Pipeline(renderer);
 
 const platforms = new Platforms();
-const basin = new Basin(platforms);
-scene.add(basin.root);
+const arena = BOSS ? new OrantArena(platforms) : new Basin(platforms);
+scene.add(arena.root);
 
 const fx = new FX(scene);
 const input = new Input(canvas);
 const cameraRig = new CameraRig(camera);
-cameraRig.setColliders(basin.colliders);
+cameraRig.setColliders(arena.colliders);
 
 const heat = new TinnHeat();
 const tinn = new Tinn();
@@ -61,14 +64,18 @@ const knell = new Knell();
 knell.addToScene(scene);
 const flasks = new Flasks(scene);
 
-// The Unfinished — one of each + a small Flashling swarm.
-const enemies = [
-  new Cull([-4, 0, -8]),
-  new Sprue([8, 0, -16]),
-  new Crucible([-2, 0, -14]),
-];
-for (let i = 0; i < 6; i++) enemies.push(new Flashling([3 + i * 0.4, 1.6, -6], (i / 6) * Math.PI * 2));
-for (const e of enemies) scene.add(e.root);
+// Enemies — the vertical-slice arena, or the Orant boss.
+let orant = null;
+let enemies;
+if (BOSS) {
+  orant = new Orant(scene, arena);
+  enemies = orant.enemies();
+  tinn.root.position.set(0, 0, 10);
+} else {
+  enemies = [new Cull([-4, 0, -8]), new Sprue([8, 0, -16]), new Crucible([-2, 0, -14])];
+  for (let i = 0; i < 6; i++) enemies.push(new Flashling([3 + i * 0.4, 1.6, -6], (i / 6) * Math.PI * 2));
+  for (const e of enemies) scene.add(e.root);
+}
 const getEnemies = () => enemies;
 
 const lockon = new LockOn(getEnemies, { range: 16 });
@@ -111,7 +118,7 @@ function timeScaleNow() {
 
 function respawnIfMelted() {
   if (heat.melt >= MELT.max) {
-    const s = basin.nearestSpawn(tinn.position);
+    const s = arena.nearestSpawn(tinn.position);
     tinn.root.position.set(s.x, 0, s.z);
     tinn.velocity.set(0, 0, 0);
     heat.melt = 0;
@@ -130,20 +137,26 @@ function fixedUpdate(dt) {
     flasks.throw(new Vector3(tinn.position.x, 1.0, tinn.position.z), dir);
   }
 
-  const env = basin.envAt(tinn.position.x, tinn.position.z);
+  const env = arena.envAt(tinn.position.x, tinn.position.z);
   heat.update(dt, env);
+  // Boss Phase 2: the pit floor is death unless you're up on a cooled hand.
+  if (arena.floorHazard) {
+    const fh = arena.floorHazard(tinn.position.x, tinn.position.z, tinn.root.position.y);
+    if (fh) hurtTinn(fh * dt);
+  }
   respawnIfMelted();
 
   const ectx = {
     dt, tinn, fx, feel, playerPos: tinn.position,
-    runnelAt: (x, z) => basin.runnelAt(x, z),
-    runnels: basin.runnels, platforms,
-    hurtTinn, addHandprint: (x, z) => basin.addHandprint(x, z),
+    runnelAt: (x, z) => arena.runnelAt(x, z),
+    runnels: arena.runnels, platforms,
+    hurtTinn, addHandprint: (x, z) => arena.addHandprint(x, z),
     getEnemies,
   };
   for (const e of enemies) e.update(ectx);
-  basin.update(dt);
-  basin.emitEmbers(fx);
+  if (orant) orant.update(ectx);
+  arena.update(dt);
+  arena.emitEmbers(fx);
   flasks.update(dt, { fx, feel, getEnemies, playerPos: tinn.position, hurtTinn });
 
   const shoulder = tinn.position.clone();
@@ -213,7 +226,8 @@ addEventListener('resize', resize); resize();
 addEventListener('keydown', (e) => { if (e.key === 'f' || e.key === 'F') pipeline.toggleResolution(); });
 
 window.__CINDERCAST__ = {
-  ready: true, tinn, cameraRig, combat, heat, enemies, fx, pipeline, lockon, basin, platforms,
+  ready: true, tinn, cameraRig, combat, heat, enemies, fx, pipeline, lockon, arena, platforms,
+  orant, getEnemies,
   setBlade: (v) => (heat.blade = v),
   forceVent: () => combat.forceVent(),
   forceSlash: () => combat.forceSlash(),

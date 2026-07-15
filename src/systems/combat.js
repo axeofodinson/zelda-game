@@ -274,6 +274,8 @@ export class Combat {
           const res = e.cool(-BLADE.plunge.enemy * this.heat.coolMult, { plunge: true });
           this.fx.steamBurst({ x: e.position.x, y: 1.0, z: e.position.z }, 16);
           landed = true;
+          // The Orant's heart dumps 90 heat into the blade — vent now or melt.
+          if (e.dumpsBladeHeat) this.heat.addBlade(e.dumpsBladeHeat);
           if (res.killed) this.feel.onKill?.(e);
         }
       }
