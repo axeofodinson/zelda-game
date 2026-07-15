@@ -152,7 +152,7 @@ export class Pipeline {
       uniforms: {
         uScene: { value: this.rtScene.texture },
         uResolution: { value: this.res.clone() },
-        uBloom: { value: 0.9 },
+        uBloom: { value: 0.5 }, // subtle — CRT bleed, not Unreal (§2)
       },
     });
     this.upscaleMat = new ShaderMaterial({

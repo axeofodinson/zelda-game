@@ -18,7 +18,7 @@ if (existsSync(CHROME)) launchOpts.executablePath = CHROME;
 
 const label = process.argv[2] || 'phase';
 const PORT = 5178;
-const PAGE_URL = `http://localhost:${PORT}/`;
+const PAGE_URL = `http://localhost:${PORT}/?demo=1`;
 const OUT = new URL('../.verify/', import.meta.url).pathname;
 mkdirSync(OUT, { recursive: true });
 
