@@ -1,259 +1,115 @@
-import {
-  WebGLRenderer,
-  Scene,
-  PerspectiveCamera,
-  Color,
-  ColorManagement,
-  LinearSRGBColorSpace,
-  Vector3,
-} from 'three';
-ColorManagement.enabled = false;
+// P0 boot. The fixed-60Hz sim + interpolated render is a later phase (§9); here
+// we only exercise the render chain: procedural sky, palette boxes on a
+// heightmap, sun scrub, and the screenshot hooks the shot tool drives.
+//
+// URL params (all optional): hour=0..24 | sun=0..1 [az] | pos=x,y,z | look=x,y,z
+//   quality=low | rock=1 (the §3.2 import test) | orbit=1
+import * as THREE from 'three';
+import { sky, makeSkyDome } from './render/sky.js';
+import { buildPaletteLUT } from './render/lut.js';
+import { makeToonMaterial } from './render/toon.js';
+import { addSmoothNormals } from './render/smoothNormals.js';
+import { makeHull } from './render/outline.js';
 import { Pipeline } from './render/pipeline.js';
-import { uploadLights } from './render/n64material.js';
-import { RGB } from './render/palette.js';
-import { CAMERA } from './config/feel.js';
-import { MELT } from './config/heat.js';
-import { Basin } from './world/basin.js';
-import { Platforms } from './systems/platforms.js';
-import { Input } from './systems/input.js';
-import { CameraRig } from './systems/camera.js';
-import { Tinn } from './actors/tinn.js';
-import { Knell } from './actors/knell.js';
-import { FX } from './fx/fx.js';
-import { TinnHeat } from './systems/heat.js';
-import { LockOn } from './systems/lockon.js';
-import { Combat } from './systems/combat.js';
-import { Flasks } from './systems/flask.js';
-import { Audio } from './audio/ambience.js';
-import { bellCentroid, bellParams } from './audio/bell.js';
-import { Cull } from './actors/enemies/cull.js';
-import { Sprue } from './actors/enemies/sprue.js';
-import { Flashling } from './actors/enemies/flashling.js';
-import { Crucible } from './actors/enemies/crucible.js';
-import { OrantArena } from './world/orant_arena.js';
-import { Orant } from './actors/enemies/orant.js';
+import { buildTerrain, heightAt, buildTerrainLUT } from './world/terrain.js';
+import { makeRock } from './world/testprops.js';
+import { P } from './render/palette.js';
 
-const canvas = document.getElementById('app');
 const params = new URLSearchParams(location.search);
-const DEMO = params.has('demo');
-const BOSS = params.has('boss');
+const num = (k, d) => (params.has(k) ? parseFloat(params.get(k)) : d);
+const vec = (k, d) => (params.has(k) ? params.get(k).split(',').map(Number) : d);
 
-const renderer = new WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+const quality = params.get('quality') === 'low' ? 'low' : 'high';
+
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
 renderer.setPixelRatio(1);
-renderer.outputColorSpace = LinearSRGBColorSpace;
-renderer.setClearColor(new Color().setRGB(...RGB.ash), 0);
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
 
-const scene = new Scene();
-scene.background = null;
-const camera = new PerspectiveCamera(CAMERA.fov, 1, 0.1, 90);
-const pipeline = new Pipeline(renderer);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.5, 4000);
 
-const platforms = new Platforms();
-const arena = BOSS ? new OrantArena(platforms) : new Basin(platforms);
-scene.add(arena.root);
+// --- Sky (§3.1) ---
+if (params.has('hour')) sky.setHour(num('hour', 12));
+else sky.setElevation(num('sun', 0.62), num('az', 0.55));
+scene.add(makeSkyDome());
 
-const fx = new FX(scene);
-const input = new Input(canvas);
-const cameraRig = new CameraRig(camera);
-cameraRig.setColliders(arena.colliders);
+// --- Palette LUT (§3.2), shared by every material ---
+const lut = buildPaletteLUT(32);
+buildTerrainLUT.lut = lut;
 
-const heat = new TinnHeat();
-const tinn = new Tinn();
-tinn.addToScene(scene);
-const knell = new Knell();
-knell.addToScene(scene);
-const flasks = new Flasks(scene);
+// --- Terrain (§3.9) ---
+scene.add(buildTerrain(360, 200));
 
-// Enemies — the vertical-slice arena, or the Orant boss.
-let orant = null;
-let enemies;
-if (BOSS) {
-  orant = new Orant(scene, arena);
-  enemies = orant.enemies();
-  tinn.root.position.set(0, 0, 10);
-} else {
-  enemies = [new Cull([-4, 0, -8]), new Sprue([8, 0, -16]), new Crucible([-2, 0, -14])];
-  for (let i = 0; i < 6; i++) enemies.push(new Flashling([3 + i * 0.4, 1.6, -6], (i / 6) * Math.PI * 2));
-  for (const e of enemies) scene.add(e.root);
-}
-const getEnemies = () => enemies;
-
-const lockon = new LockOn(getEnemies, { range: 16 });
-
-// ---- feel hooks -------------------------------------------------------------
-let hitstopUntil = 0, slowUntil = 0, slowEaseUntil = 0;
-const feel = {
-  shake: (m) => cameraRig.addShake(m),
-  punch: () => cameraRig.punch(),
-  hitstop: (ms) => { hitstopUntil = Math.max(hitstopUntil, performance.now() + ms); },
-  tink: () => {},
-  onKill: (e) => { fx.verdigrisFlakes(e.position); slowUntil = performance.now() + 200; slowEaseUntil = slowUntil + 300; },
-};
-
-const audio = new Audio();
-feel.clang = () => audio.clang();
-feel.tink = () => audio.tink();
-feel.swing = () => audio.swing();
-feel.steam = () => audio.steam();
-const startAudio = () => audio.start();
-addEventListener('keydown', startAudio, { once: true });
-addEventListener('pointerdown', startAudio, { once: true });
-
-const combat = new Combat({ tinn, heat, fx, getEnemies, lockon, feel });
-tinn.setCombat(combat);
-
-const hurtTinn = (amt) => { if (!tinn.invuln) heat.hurt(amt); };
-const initialHeat = enemies.reduce((s, e) => s + e.maxHeat, 0);
-let prevTarget = null;
-
-// ---- loop -------------------------------------------------------------------
-const STEP = 1 / 60;
-let acc = 0, last = performance.now() / 1000;
-let demoAtk = 0;
-
-function timeScaleNow() {
-  const now = performance.now();
-  if (now < slowUntil) return 0.25;
-  if (now < slowEaseUntil) return 0.25 + 0.75 * (1 - (slowEaseUntil - now) / 300);
-  return 1;
+// --- Palette boxes: the P0 test rig (§10 P0) ---
+function addBox(colorHex, w, h, d, x, z, { rot = 0 } = {}) {
+  const geo = addSmoothNormals(new THREE.BoxGeometry(w, h, d));
+  const mesh = new THREE.Mesh(geo, makeToonMaterial({ color: colorHex, lut }));
+  mesh.position.set(x, heightAt(x, z) + h / 2, z);
+  mesh.rotation.y = rot;
+  mesh.castShadow = mesh.receiveShadow = true;
+  mesh.add(makeHull(mesh)); // hull follows via parenting
+  scene.add(mesh);
+  return mesh;
 }
 
-function respawnIfMelted() {
-  if (heat.melt >= MELT.max) {
-    const s = arena.nearestSpawn(tinn.position);
-    tinn.root.position.set(s.x, 0, s.z);
-    tinn.velocity.set(0, 0, 0);
-    heat.melt = 0;
-    heat.blade = 0;
-    heat.timeSinceHit = 0;
-  }
+// A foreground cluster (ramp, hull, creases up close) + boxes into the distance
+// (aerial + line fade). One red `cloth` box — the only red in the world.
+addBox(P.rock, 6, 8, 6, -8, 6);
+addBox(P.wood, 4, 5, 4, -2, 9, { rot: 0.4 });
+addBox(P.grass, 5, 3, 5, 6, 7);
+addBox(P.metal, 3, 6, 3, 11, 4, { rot: 0.7 });
+addBox(P.soil, 7, 4, 4, 2, 2, { rot: 0.2 });
+addBox(P.cloth, 2.2, 3.2, 2.2, 4, 12);
+addBox(P.water, 8, 2, 8, -14, -4);
+addBox(P.rock, 8, 12, 8, -34, -30);
+addBox(P.wood, 6, 9, 6, 30, -26, { rot: 0.5 });
+addBox(P.rockLo, 10, 16, 10, -60, -70);
+addBox(P.grassLo, 12, 8, 12, 70, -80);
+addBox(P.rock, 14, 20, 14, -110, -120);
+addBox(P.wood, 12, 22, 12, 120, -130);
+
+// --- §3.2/§3.4 style test (?rock=1): imported-style props must be
+// indistinguishable from the boxes. Off-palette colour + split normals. ---
+if (params.get('rock') === '1') {
+  scene.add(makeRock(lut, { radius: 4.0, x: -18, z: 30, seed: 3, color: '#9a8b76' }));
+  scene.add(makeRock(lut, { radius: 2.8, x: -6, z: 34, seed: 11, color: '#4f463c' }));
 }
 
-function fixedUpdate(dt) {
-  lockon.update(input.lockHeld, tinn.position);
-  const basis = cameraRig.groundBasis();
-  tinn.update(dt, input, { basis, fx, heat, lockon, platforms });
+// --- Camera ---
+const camPos = vec('pos', [46, 34, 52]);
+const look = vec('look', [-6, 8, -8]);
+camera.position.set(camPos[0], camPos[1], camPos[2]);
+camera.lookAt(look[0], look[1], look[2]);
 
-  if (input.wasPressed('1')) {
-    const dir = new Vector3(Math.sin(tinn.root.rotation.y), 0, Math.cos(tinn.root.rotation.y));
-    flasks.throw(new Vector3(tinn.position.x, 1.0, tinn.position.z), dir);
-  }
+// --- Pipeline (§3.7) ---
+const pipeline = new Pipeline(renderer, scene, camera, quality);
 
-  const env = arena.envAt(tinn.position.x, tinn.position.z);
-  heat.update(dt, env);
-  // Boss Phase 2: the pit floor is death unless you're up on a cooled hand.
-  if (arena.floorHazard) {
-    const fh = arena.floorHazard(tinn.position.x, tinn.position.z, tinn.root.position.y);
-    if (fh) hurtTinn(fh * dt);
-  }
-  respawnIfMelted();
+addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  pipeline.setSize(renderer.domElement.width, renderer.domElement.height);
+});
 
-  const ectx = {
-    dt, tinn, fx, feel, playerPos: tinn.position,
-    runnelAt: (x, z) => arena.runnelAt(x, z),
-    runnels: arena.runnels, platforms,
-    hurtTinn, addHandprint: (x, z) => arena.addHandprint(x, z),
-    getEnemies,
-  };
-  for (const e of enemies) e.update(ectx);
-  if (orant) orant.update(ectx);
-  arena.update(dt);
-  arena.emitEmbers(fx);
-  flasks.update(dt, { fx, feel, getEnemies, playerPos: tinn.position, hurtTinn });
-
-  const shoulder = tinn.position.clone();
-  shoulder.y += 1.1;
-  const lockT = lockon.active ? lockon.target : null;
-  knell.update(dt, shoulder, lockT, lockT ? lockT.glow : 0);
-
-  // Knell rings + sounds at the locked target; pitch tracks its heat (§7).
-  if (lockT) {
-    if (lockT !== prevTarget) {
-      fx.knellRing({ x: lockT.position.x, y: lockT.position.y + 1.4, z: lockT.position.z });
-      audio.ring(lockT.glow, true);
-    } else {
-      audio.ring(lockT.glow); // throttled inside; you hear it cool as you slash
-    }
-  }
-  prevTarget = lockT;
-  const totalHeat = enemies.reduce((s, e) => s + (e.dead ? 0 : e.heat), 0);
-  audio.setTension(initialHeat ? totalHeat / initialHeat : 0);
-  cameraRig.update(dt, tinn.position, tinn.velocity, lockT ? lockT.position : null);
-  fx.update(dt, camera.position);
-}
-
-function driveDemo(elapsed) {
-  demoAtk += elapsed;
-  input.down.add('shift');
-  const live = enemies.filter((e) => !e.dead);
-  if (!live.length) { input.move.set(0, 0); return; }
-  let near = live[0], nd = Infinity;
-  for (const e of live) { const d = e.position.distanceTo(tinn.position); if (d < nd) { nd = d; near = e; } }
-  if (nd > 2.6) {
-    const basis = cameraRig.groundBasis();
-    const to = near.position.clone().sub(tinn.position); to.y = 0;
-    input.move.set(to.dot(basis.right) > 0 ? 0.5 : -0.5, 0.9);
-  } else {
-    input.move.set(0, 0);
-    if (demoAtk > 0.7 && combat.state === 'idle') { demoAtk = 0; heat.blade >= 82 ? combat.forceVent() : combat.forceSlash(); }
-  }
-}
+// --- Screenshot hooks (§0.5) ---
+const orbit = params.get('orbit') === '1';
+const t0 = performance.now();
+window.__setSun = (elev, az = 0.55) => sky.setElevation(elev, az);
+window.__setHour = (h) => sky.setHour(h);
+window.__ready = false;
 
 function frame() {
-  const now = performance.now() / 1000;
-  let elapsed = now - last; last = now;
-  if (elapsed > 0.25) elapsed = 0.25;
-  if (DEMO) driveDemo(elapsed); else input.begin();
-  cameraRig.applyLook(input.mouse);
-
-  if (performance.now() >= hitstopUntil) {
-    acc += elapsed * timeScaleNow();
-    while (acc >= STEP) { fixedUpdate(STEP); acc -= STEP; }
+  const t = (performance.now() - t0) / 1000;
+  if (orbit) {
+    const r = 70, a = t * 0.2;
+    camera.position.set(Math.cos(a) * r, 30 + Math.sin(t * 0.1) * 6, Math.sin(a) * r);
+    camera.lookAt(0, 10, 0);
   }
-  input.end();
-
-  const mf = heat.meltFactor;
-  pipeline.postMat.uniforms.uDesat.value = Math.max(0, Math.min(1, (mf - MELT.failingAt / 100) / 0.15));
-  uploadLights(camera.position);
-  pipeline.render(scene, camera);
+  pipeline.render();
+  window.__ready = true;
   requestAnimationFrame(frame);
 }
+frame();
 
-function resize() {
-  const w = canvas.clientWidth || innerWidth, h = canvas.clientHeight || innerHeight;
-  renderer.setSize(w, h, false);
-  camera.aspect = w / h; camera.updateProjectionMatrix();
-}
-addEventListener('resize', resize); resize();
-addEventListener('keydown', (e) => { if (e.key === 'f' || e.key === 'F') pipeline.toggleResolution(); });
-
-window.__CINDERCAST__ = {
-  ready: true, tinn, cameraRig, combat, heat, enemies, fx, pipeline, lockon, arena, platforms,
-  orant, getEnemies,
-  setBlade: (v) => (heat.blade = v),
-  forceVent: () => combat.forceVent(),
-  forceSlash: () => combat.forceSlash(),
-  overhead: (h) => cameraRig.setOverhead(h),
-  killEnemy: (i) => { const e = enemies[i]; if (e && !e.dead) e.cool(e.heat + 999); },
-  standOn: (i) => {
-    const e = enemies[i];
-    tinn.root.position.set(e.position.x, 3, e.position.z);
-    return { enemyTop: e.standSize.h };
-  },
-  tinnY: () => tinn.root.position.y,
-  detonateFlask: (x, z) =>
-    flasks._detonate(new Vector3(x, 0.4, z), { fx, feel, getEnemies, playerPos: tinn.position, hurtTinn }),
-  exposeCrucible: (i) => { const e = enemies[i]; e.mode = 'stunned'; e.mt = 0; e.exposed = true; e.coolable = [e._topSphere]; },
-  audio,
-  bellCentroid,
-  bellParams,
-  feelState: () => ({
-    hitstop: performance.now() < hitstopUntil,
-    slow: timeScaleNow() < 1,
-    timeScale: timeScaleNow(),
-    squashY: tinn.squashY,
-  }),
-  triggerHitstop: (ms) => feel.hitstop(ms),
-  triggerKillSlow: () => feel.onKill(enemies.find((e) => !e.dead) || enemies[0]),
-};
-requestAnimationFrame(frame);
+console.log('[plateau] p0 ready', { quality, sun: sky.sunDir.toArray().map((n) => +n.toFixed(2)) });

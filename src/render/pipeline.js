@@ -1,209 +1,260 @@
-import {
-  WebGLRenderTarget,
-  ShaderMaterial,
-  BufferGeometry,
-  BufferAttribute,
-  Mesh,
-  Scene,
-  OrthographicCamera,
-  NearestFilter,
-  LinearFilter,
-  RGBAFormat,
-  GLSL3,
-  Vector2,
-  Vector3,
-} from 'three';
+// §3.7 — The render chain. prepass → hull → main → edge → bloom → LUT grade → AA.
+// Shadows: single cascade to 40m (§3.7 lists 2-cascade CSM; P0 ships one tight
+// cascade — see PROGRESS). Quality toggle lives here from day one, not phase 7.
+import * as THREE from 'three';
+import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
+import { sky } from './sky.js';
+import { shadowUniforms } from './toon.js';
+import { makeNormalDepthMaterial, makeEdgeMaterial } from './edges.js';
 
-// ---------------------------------------------------------------------------
-// The N64 post chain (§2):
-//
-//   scene --> RT(320x240) --> [ bloom(emissive) + Bayer dither + 5551 quantize ]
-//         --> RT(320x240) --> [ LINEAR upscale to canvas ]
-//
-// The dither/quantize MUST run at internal resolution so the Bayer grid is one
-// cell per internal pixel; the linear upscale afterwards is what makes N64
-// output soft rather than crunchy.
-// ---------------------------------------------------------------------------
+const HALF = THREE.HalfFloatType;
 
-export const RES_LOW = new Vector2(320, 240);
-export const RES_HIGH = new Vector2(640, 480);
-
-// A fullscreen triangle whose clip coords come straight from the vertex data,
-// so no camera math is involved.
-class FullScreenTri {
-  constructor(material) {
-    this.geo = new BufferGeometry();
-    this.geo.setAttribute(
-      'position',
-      new BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3)
-    );
-    this.geo.setAttribute(
-      'uv',
-      new BufferAttribute(new Float32Array([0, 0, 2, 0, 0, 2]), 2)
-    );
-    this.mesh = new Mesh(this.geo, material);
-    this.mesh.frustumCulled = false;
-    this.scene = new Scene();
-    this.scene.add(this.mesh);
-    this.cam = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
-  }
-  set material(m) {
-    this.mesh.material = m;
-  }
-  render(renderer) {
-    renderer.render(this.scene, this.cam);
-  }
+function makeRT(w, h, opts = {}) {
+  return new THREE.WebGLRenderTarget(w, h, {
+    type: HALF, format: THREE.RGBAFormat,
+    minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+    depthBuffer: opts.depth ?? false, stencilBuffer: false,
+    ...opts,
+  });
 }
-
-// three injects `in vec3 position;` and `in vec2 uv;` for a GLSL3
-// ShaderMaterial, so we only declare our own varying and use position.xy.
-const postVert = /* glsl */ `
-  out vec2 vUv;
-  void main() {
-    vUv = uv;
-    gl_Position = vec4(position.xy, 0.0, 1.0);
-  }
-`;
-
-// Recursive 4x4 Bayer, no array indexing (works everywhere).
-const bayerGLSL = /* glsl */ `
-  float bayer2(vec2 a) {
-    a = floor(a);
-    return fract(a.x * 0.5 + a.y * a.y * 0.75);
-  }
-  float bayer4(vec2 a) {
-    return bayer2(0.5 * a) * 0.25 + bayer2(a);
-  }
-`;
-
-const postFrag = /* glsl */ `
-  precision mediump float;
-  uniform sampler2D uScene;
-  uniform vec2 uResolution;
-  uniform float uBloom;
-  uniform float uDesat;      // 0..1 — screen desaturates toward molten (melt≥85)
-  uniform vec3 uMolten;
-  in vec2 vUv;
-  out vec4 outColor;
-
-  ${bayerGLSL}
-
-  void main() {
-    vec2 texel = 1.0 / uResolution;
-    vec4 s = texture(uScene, vUv);
-    vec3 col = s.rgb;
-
-    // --- Emissive-only bloom (threshold 0.85), cheap cross of taps ---------
-    // Alpha carries the per-fragment emissive mask written by n64material.
-    vec3 bloom = vec3(0.0);
-    float wsum = 0.0;
-    for (int i = -2; i <= 2; i++) {
-      for (int j = -2; j <= 2; j++) {
-        vec2 o = vec2(float(i), float(j)) * texel * 1.5;
-        vec4 n = texture(uScene, vUv + o);
-        float e = smoothstep(0.85, 1.0, n.a);
-        float w = 1.0 / (1.0 + float(i * i + j * j));
-        bloom += n.rgb * e * w;
-        wsum += w;
-      }
-    }
-    if (wsum > 0.0) bloom /= wsum;
-    col += bloom * uBloom;
-
-    // --- Melt desaturation: world drains toward molten as Tinn fails -------
-    if (uDesat > 0.001) {
-      float l = dot(col, vec3(0.299, 0.587, 0.114));
-      vec3 drained = mix(vec3(l), uMolten * (0.6 + l), 0.5);
-      col = mix(col, drained, uDesat);
-    }
-
-    // --- Ordered dither + RGB5551 quantize --------------------------------
-    float b = bayer4(gl_FragCoord.xy);
-    vec3 q = floor(col * 31.0 + b) / 31.0; // 5 bits per channel
-    outColor = vec4(q, 1.0);
-  }
-`;
-
-const upscaleFrag = /* glsl */ `
-  precision mediump float;
-  uniform sampler2D uTex;
-  in vec2 vUv;
-  out vec4 outColor;
-  void main() {
-    outColor = texture(uTex, vUv);
-  }
-`;
 
 export class Pipeline {
-  constructor(renderer) {
+  constructor(renderer, scene, camera, quality = 'high') {
     this.renderer = renderer;
-    this.res = RES_LOW.clone();
+    this.scene = scene;
+    this.camera = camera;
+    this.quality = quality;
+    this.ss = quality === 'high' ? 1.25 : 1.0;
 
-    this.rtScene = new WebGLRenderTarget(this.res.x, this.res.y, {
-      minFilter: NearestFilter,
-      magFilter: NearestFilter,
-      format: RGBAFormat,
-      depthBuffer: true,
-      stencilBuffer: false,
+    // Shadow (single cascade, 40m).
+    const S = quality === 'high' ? 2048 : 1024;
+    this.shadowSize = S;
+    this.shadowCam = new THREE.OrthographicCamera(-42, 42, 42, -42, 1, 300);
+    const depthTex = new THREE.DepthTexture(S, S);
+    depthTex.type = THREE.UnsignedIntType;
+    this.shadowRT = new THREE.WebGLRenderTarget(S, S, {
+      depthTexture: depthTex, depthBuffer: true,
+      minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
     });
-    // rtPost is sampled by the upscale with LINEAR filtering — the softness.
-    this.rtPost = new WebGLRenderTarget(this.res.x, this.res.y, {
-      minFilter: LinearFilter,
-      magFilter: LinearFilter,
-      format: RGBAFormat,
-      depthBuffer: false,
-      stencilBuffer: false,
-    });
+    shadowUniforms.uShadowMap.value = depthTex;
+    shadowUniforms.uShadowTexel.value = 1 / S;
+    this.depthOverride = new THREE.MeshBasicMaterial();
 
-    this.postMat = new ShaderMaterial({
-      glslVersion: GLSL3,
-      vertexShader: postVert,
-      fragmentShader: postFrag,
-      uniforms: {
-        uScene: { value: this.rtScene.texture },
-        uResolution: { value: this.res.clone() },
-        uBloom: { value: 0.5 }, // subtle — CRT bleed, not Unreal (§2)
-        uDesat: { value: 0 },
-        uMolten: { value: new Vector3(1.0, 0.42, 0.1) },
-      },
-    });
-    this.upscaleMat = new ShaderMaterial({
-      glslVersion: GLSL3,
-      vertexShader: postVert,
-      fragmentShader: upscaleFrag,
-      uniforms: { uTex: { value: this.rtPost.texture } },
-    });
+    this.normalDepthMat = makeNormalDepthMaterial();
+    this.edgeMat = makeEdgeMaterial();
 
-    this.quad = new FullScreenTri(this.postMat);
+    // Bloom (threshold 0.9, strength 0.5).
+    this.brightMat = this._bright();
+    this.blurMat = this._blur();
+    this.combineMat = this._combine();
+    this.finalMat = this._final();
+    this.fsq = new FullScreenQuad();
+
+    this.setSize(renderer.domElement.width, renderer.domElement.height);
   }
 
-  setInternalResolution(vec) {
-    this.res.copy(vec);
-    this.rtScene.setSize(this.res.x, this.res.y);
-    this.rtPost.setSize(this.res.x, this.res.y);
-    this.postMat.uniforms.uResolution.value.copy(this.res);
+  setSize(w, h) {
+    this.width = w; this.height = h;
+    const rw = Math.ceil(w * this.ss), rh = Math.ceil(h * this.ss);
+    this.rw = rw; this.rh = rh;
+    for (const rt of [this.normalRT, this.beautyRT, this.sceneRT, this.compRT,
+      this.bloomA, this.bloomB]) rt?.dispose();
+    this.normalRT = makeRT(rw, rh, { depth: true }); // needs its own depth test,
+    // else occluded meshes still write normals/depth and the edge pass draws
+    // phantom silhouettes over whatever is actually in front.
+    this.beautyRT = makeRT(rw, rh, { depth: true });
+    this.sceneRT = makeRT(rw, rh);
+    this.compRT = makeRT(rw, rh);
+    const bw = Math.ceil(rw / 2), bh = Math.ceil(rh / 2);
+    this.bloomA = makeRT(bw, bh);
+    this.bloomB = makeRT(bw, bh);
+    this.edgeMat.uniforms.uTexel.value.set(1 / rw, 1 / rh);
+    this.finalMat.uniforms.uTexel.value.set(1 / rw, 1 / rh);
+    this.blurMat.uniforms.uTexel.value.set(1 / bw, 1 / bh);
   }
 
-  toggleResolution() {
-    this.setInternalResolution(this.res.x === RES_LOW.x ? RES_HIGH : RES_LOW);
+  _pass(mat, target) {
+    this.fsq.material = mat;
+    this.renderer.setRenderTarget(target);
+    this.fsq.render(this.renderer);
   }
 
-  render(scene, camera) {
+  _hide(pred) {
+    const hidden = [];
+    this.scene.traverse((o) => {
+      if (o.visible && pred(o)) { o.visible = false; hidden.push(o); }
+    });
+    return hidden;
+  }
+  _show(list) { for (const o of list) o.visible = true; }
+
+  _updateShadow() {
+    const center = new THREE.Vector3();
+    // Centre the cascade a little ahead of the camera along its ground heading.
+    this.camera.getWorldDirection(center);
+    center.multiplyScalar(20).add(this.camera.position);
+    center.y = 0;
+    const cam = this.shadowCam;
+    cam.position.copy(sky.sunDir).multiplyScalar(140).add(center);
+    cam.lookAt(center);
+    cam.updateMatrixWorld(true);
+    cam.updateProjectionMatrix();
+    shadowUniforms.uShadowMatrix.value
+      .multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+  }
+
+  render() {
     const r = this.renderer;
+    const prevTarget = r.getRenderTarget();
 
-    // Pass A — scene to the internal-res target.
-    r.setRenderTarget(this.rtScene);
+    // 1. Shadow map.
+    this._updateShadow();
+    let hidden = this._hide((o) => o.userData.isHull || o.userData.isSky);
+    this.scene.overrideMaterial = this.depthOverride;
+    r.setRenderTarget(this.shadowRT);
     r.clear();
-    r.render(scene, camera);
+    r.render(this.scene, this.shadowCam);
+    this.scene.overrideMaterial = null;
+    this._show(hidden);
 
-    // Pass B — bloom + dither + quantize at internal res.
-    r.setRenderTarget(this.rtPost);
-    this.quad.material = this.postMat;
-    this.quad.render(r);
+    // 2. Depth+normal prepass (exclude hull + sky).
+    hidden = this._hide((o) => o.userData.isHull || o.userData.isSky);
+    this.scene.overrideMaterial = this.normalDepthMat;
+    r.setRenderTarget(this.normalRT);
+    r.setClearColor(0x000000, 0);
+    r.clear();
+    r.render(this.scene, this.camera);
+    this.scene.overrideMaterial = null;
+    this._show(hidden);
 
-    // Pass C — linear upscale to the canvas.
-    r.setRenderTarget(null);
-    this.quad.material = this.upscaleMat;
-    this.quad.render(r);
+    // 3. Beauty (hull + main, sky dome fills background).
+    r.setRenderTarget(this.beautyRT);
+    r.clear();
+    r.render(this.scene, this.camera);
+
+    // 4. Edge detect + composite.
+    this.edgeMat.uniforms.uScene.value = this.beautyRT.texture;
+    this.edgeMat.uniforms.uNormalDepth.value = this.normalRT.texture;
+    this._pass(this.edgeMat, this.sceneRT);
+
+    // 5. Bloom.
+    this.brightMat.uniforms.uTex.value = this.sceneRT.texture;
+    this._pass(this.brightMat, this.bloomA);
+    this.blurMat.uniforms.uTex.value = this.bloomA.texture;
+    this.blurMat.uniforms.uDir.value.set(1, 0);
+    this._pass(this.blurMat, this.bloomB);
+    this.blurMat.uniforms.uTex.value = this.bloomB.texture;
+    this.blurMat.uniforms.uDir.value.set(0, 1);
+    this._pass(this.blurMat, this.bloomA);
+    this.combineMat.uniforms.uScene.value = this.sceneRT.texture;
+    this.combineMat.uniforms.uBloom.value = this.bloomA.texture;
+    this._pass(this.combineMat, this.compRT);
+
+    // 6+7. LUT grade + AA + sRGB, straight to the canvas (downsamples on high).
+    this.finalMat.uniforms.uTex.value = this.compRT.texture;
+    this.renderer.setRenderTarget(null);
+    this.fsq.material = this.finalMat;
+    this.fsq.render(this.renderer);
+
+    r.setRenderTarget(prevTarget);
+  }
+
+  _bright() {
+    return new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      uniforms: { uTex: { value: null }, uThreshold: { value: 0.9 } },
+      vertexShader: FS_VERT,
+      fragmentShader: /* glsl */ `
+        precision highp float; uniform sampler2D uTex; uniform float uThreshold;
+        in vec2 vUv; out vec4 pFragColor;
+        void main() {
+          vec3 c = texture(uTex, vUv).rgb;
+          float l = dot(c, vec3(0.299, 0.587, 0.114));
+          pFragColor = vec4(c * max(l - uThreshold, 0.0) / max(l, 1e-4), 1.0);
+        }`,
+    });
+  }
+  _blur() {
+    return new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      uniforms: { uTex: { value: null }, uTexel: { value: new THREE.Vector2() },
+        uDir: { value: new THREE.Vector2(1, 0) } },
+      vertexShader: FS_VERT,
+      fragmentShader: /* glsl */ `
+        precision highp float; uniform sampler2D uTex; uniform vec2 uTexel, uDir;
+        in vec2 vUv; out vec4 pFragColor;
+        void main() {
+          vec2 o = uTexel * uDir;
+          vec3 c = texture(uTex, vUv).rgb * 0.227027;
+          c += texture(uTex, vUv + o * 1.3846).rgb * 0.316216;
+          c += texture(uTex, vUv - o * 1.3846).rgb * 0.316216;
+          c += texture(uTex, vUv + o * 3.2308).rgb * 0.070270;
+          c += texture(uTex, vUv - o * 3.2308).rgb * 0.070270;
+          pFragColor = vec4(c, 1.0);
+        }`,
+    });
+  }
+  _combine() {
+    return new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      uniforms: { uScene: { value: null }, uBloom: { value: null }, uStrength: { value: 0.5 } },
+      vertexShader: FS_VERT,
+      fragmentShader: /* glsl */ `
+        precision highp float; uniform sampler2D uScene, uBloom; uniform float uStrength;
+        in vec2 vUv; out vec4 pFragColor;
+        void main() {
+          pFragColor = vec4(texture(uScene, vUv).rgb + texture(uBloom, vUv).rgb * uStrength, 1.0);
+        }`,
+    });
+  }
+  _final() {
+    return new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      defines: this.quality === 'high' ? { AA_BOX: '' } : { AA_FXAA: '' },
+      uniforms: { uTex: { value: null }, uTexel: { value: new THREE.Vector2() } },
+      vertexShader: FS_VERT,
+      fragmentShader: /* glsl */ `
+        precision highp float; uniform sampler2D uTex; uniform vec2 uTexel;
+        in vec2 vUv; out vec4 pFragColor;
+        vec3 srgb(vec3 c){ return mix(1.055*pow(c,vec3(1.0/2.4))-0.055, c*12.92, step(c,vec3(0.0031308))); }
+        void main() {
+          vec3 c;
+          #ifdef AA_BOX
+            // supersample downsample: 4-tap box at half-texel of the hi-res RT.
+            vec2 o = uTexel * 0.5;
+            c  = texture(uTex, vUv + vec2( o.x,  o.y)).rgb;
+            c += texture(uTex, vUv + vec2(-o.x,  o.y)).rgb;
+            c += texture(uTex, vUv + vec2( o.x, -o.y)).rgb;
+            c += texture(uTex, vUv + vec2(-o.x, -o.y)).rgb;
+            c *= 0.25;
+          #elif defined(AA_FXAA)
+            // cheap FXAA — luma-directional blend. Enough to soften jaggies on low.
+            vec3 rgbNW = texture(uTex, vUv + vec2(-1.0,-1.0)*uTexel).rgb;
+            vec3 rgbNE = texture(uTex, vUv + vec2( 1.0,-1.0)*uTexel).rgb;
+            vec3 rgbSW = texture(uTex, vUv + vec2(-1.0, 1.0)*uTexel).rgb;
+            vec3 rgbSE = texture(uTex, vUv + vec2( 1.0, 1.0)*uTexel).rgb;
+            vec3 rgbM  = texture(uTex, vUv).rgb;
+            vec3 luma = vec3(0.299, 0.587, 0.114);
+            float lNW=dot(rgbNW,luma), lNE=dot(rgbNE,luma), lSW=dot(rgbSW,luma), lSE=dot(rgbSE,luma), lM=dot(rgbM,luma);
+            float lMin=min(lM,min(min(lNW,lNE),min(lSW,lSE)));
+            float lMax=max(lM,max(max(lNW,lNE),max(lSW,lSE)));
+            vec2 dir = vec2(-((lNW+lNE)-(lSW+lSE)), ((lNW+lSW)-(lNE+lSE)));
+            float red = max((lNW+lNE+lSW+lSE)*0.25*0.5, 1.0/128.0);
+            float rcp = 1.0/(min(abs(dir.x),abs(dir.y))+red);
+            dir = clamp(dir*rcp, -8.0, 8.0) * uTexel;
+            vec3 a = 0.5*(texture(uTex, vUv+dir*(1.0/3.0-0.5)).rgb + texture(uTex, vUv+dir*(2.0/3.0-0.5)).rgb);
+            vec3 b = a*0.5 + 0.25*(texture(uTex, vUv+dir*-0.5).rgb + texture(uTex, vUv+dir*0.5).rgb);
+            float lB = dot(b, luma);
+            c = (lB < lMin || lB > lMax) ? a : b;
+          #else
+            c = texture(uTex, vUv).rgb;
+          #endif
+          pFragColor = vec4(srgb(clamp(c, 0.0, 1.0)), 1.0);
+        }`,
+    });
   }
 }
+
+const FS_VERT = /* glsl */ `
+  out vec2 vUv;
+  void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;

@@ -1,116 +1,16 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" href="data:," />
-    <title>CINDERCAST</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PLATEAU — working title</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'><rect width='8' height='8' fill='%232A2118'/></svg>" />
     <style>
-      html, body {
-        margin: 0;
-        padding: 0;
-        height: 100%;
-        background: #000;
-        overflow: hidden;
-      }
-      #app {
-        position: fixed;
-        inset: 0;
-        display: block;
-      }
-      /* The canvas fills the viewport; the 320x240 look comes from the
-         internal render target, not from a small canvas. */
-      canvas {
-        display: block;
-        width: 100%;
-        height: 100%;
-        image-rendering: auto; /* linear upscale is done in-shader */
-      }
-      #hint {
-        position: fixed;
-        left: 8px;
-        bottom: 6px;
-        font: 11px/1.4 monospace;
-        color: #B7B2A8;
-        opacity: 0.5;
-        user-select: none;
-        pointer-events: none;
-      }
-      /* Title / controls card — dismissed on first input. */
-      #start {
-        position: fixed;
-        inset: 0;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 1.1rem;
-        background: rgba(15, 13, 12, 0.82);
-        color: #B7B2A8;
-        font-family: system-ui, -apple-system, monospace;
-        text-align: center;
-        z-index: 10;
-        transition: opacity 0.5s ease;
-        cursor: pointer;
-        user-select: none;
-      }
-      #start.gone { opacity: 0; pointer-events: none; }
-      #start h1 {
-        margin: 0;
-        font-size: clamp(2rem, 8vw, 4rem);
-        letter-spacing: 0.35em;
-        font-weight: 700;
-        color: #FF6B1A;
-        text-shadow: 0 0 24px rgba(255, 107, 26, 0.5);
-      }
-      #start .sub { margin: 0; opacity: 0.7; font-size: 0.85rem; letter-spacing: 0.2em; }
-      #start .keys {
-        margin-top: 0.4rem;
-        display: grid;
-        grid-template-columns: auto auto;
-        gap: 0.35rem 1.2rem;
-        font: 13px/1.5 monospace;
-        opacity: 0.85;
-        text-align: left;
-      }
-      #start .keys b { color: #4FBFA8; font-weight: 600; }
-      #start .go { margin-top: 0.8rem; font-size: 0.8rem; opacity: 0.6; letter-spacing: 0.25em; animation: pulse 1.8s ease-in-out infinite; }
-      @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.8; } }
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #2A2118; }
+      canvas { display: block; }
     </style>
   </head>
   <body>
-    <canvas id="app"></canvas>
-    <div id="start">
-      <h1>CINDERCAST</h1>
-      <p class="sub">Ashfall Basin &mdash; a vertical slice</p>
-      <div class="keys">
-        <b>WASD</b><span>move (camera-relative)</span>
-        <b>Mouse</b><span>look &mdash; click to capture</span>
-        <b>J / LMB</b><span>slash</span>
-        <b>Hold LMB</b><span>charge &amp; release the vent</span>
-        <b>Space</b><span>roll / dodge</span>
-        <b>Shift</b><span>lock on &mdash; strafe</span>
-        <b>RMB / K</b><span>ward</span>
-        <b>1</b><span>quenchflask</span>
-      </div>
-      <p class="go">CLICK OR PRESS ANY KEY TO BEGIN</p>
-    </div>
-    <div id="hint">[F] toggle 320&times;240 / 640&times;480 &nbsp;&middot;&nbsp; ?boss=1 for the Orant</div>
-    <script>
-      // Dismiss the start card + capture the pointer on first input.
-      (function () {
-        var card = document.getElementById('start');
-        function dismiss() {
-          if (card.classList.contains('gone')) return;
-          card.classList.add('gone');
-          try { document.getElementById('app').requestPointerLock?.(); } catch (e) {}
-          removeEventListener('keydown', dismiss);
-          removeEventListener('pointerdown', dismiss);
-        }
-        addEventListener('keydown', dismiss);
-        addEventListener('pointerdown', dismiss);
-      })();
-    </script>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
