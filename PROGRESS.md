@@ -80,6 +80,23 @@ validated §3.2/§3.4). Once populated: load, run `smoothNormals` over every mes
 silhouettes at 25 m, log licences in `CREDITS.md`, pick a primary pack. First real bug to
 expect: the GLB loader hang (see Known issues).
 
+### Pre-P1 probe (two suspected P0 defects, checked before starting assets)
+Both probed with numpy pixel readback against the saved `shots/p0-*.png` (ground truth,
+same discipline as `probe`), not by eyeballing. **Neither was a real bug.**
+1. **Box hull outline "may be missing" vs rocks — false alarm.** Sampled the grey box's
+   top+right silhouette against sky in `p0-rock.png` column-by-column (incl. the 90° corner):
+   the ink line is continuous, no dropouts, darkest pixel `(58,73,78)` — distance 69 from
+   `PC.ink #2A2118`, essentially the same order as the tan rock's silhouette darkest pixel
+   `(64,71,71)`, distance 64. Boxes only *look* less inked because a flat box has one crease
+   vs. a faceted rock's dozens (§3.4 Roberts-edge lines), not because the inverted-hull
+   (§3.4, `addSmoothNormals` + `makeHull`) is failing on box geometry.
+2. **Diagonal band across the grass at dusk — a real shadow, not a seam.** Vertical probes
+   through the band in `p0-dusk.png` (x=900, x=955) show a smooth ~20-50 px colour ramp
+   (soil `170,138,99`→`120,116,102`, grass `130,162,76`→`114,134,79`), matching the 3×3 PCF
+   soft-shadow edge, not a hard single-pixel discontinuity. Confirmed directional: the
+   identical framing in `p0-noon.png` has no band at all — it only appears under the
+   raking dusk sun, i.e. it's the tall grey box's cast shadow, not a terrain/LOD seam.
+
 ---
 
 ## §12 answers (recorded)
