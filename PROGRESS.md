@@ -48,18 +48,37 @@ a palette-box test scene on a heightmap, then the §3.2 import test.
 ### Known issues
 - Faint shadow-map banding on steep slopes at low sun (acne). Cosmetic; revisit with CSM.
 - The terrain silhouette ridge line can read a touch heavy at some framings.
-- GLB import path (`loadGLB`) was prototyped then removed — the local test GLB hung
-  `window.__ready` (loader/fetch stall under the proxy). P1 writes the real asset loader.
+- **GLB loading hung `__ready` in P0** (loader or fetch). Unresolved — the loader was removed
+  as out-of-phase. **This is P1's first real bug.** Suspect the proxy 403 that also broke the
+  `raw=1` probe.
+- **Intermittent proxy 403s can prevent module boot with NO `pageerror`.** If a page fails to
+  initialise and there's no JS exception, suspect the network before the code. Cost several
+  rounds in P0.
+
+### Instrument (SPEC_PATCH_01 applied — doc edit, not a phase)
+Upgraded the screenshot loop to the patch's mandatory spec and verified all of it:
+- `shot` forwards **every** `--flag` verbatim (no whitelist).
+- Every PNG carries a **burned-in URL caption** (top-left monospace) — a misforwarded param
+  is visible in the artifact.
+- `npm run probe -- <name> --at x,y[;x,y]` prints canvas RGB (ground truth). Verified:
+  red box → `#cc5b4f`, green box → `#6abb56`.
+- `shot` **self-test** (independent `selftest.html`, 2×2 colour grid) runs on first use / via
+  `--selftest`. Verified: TL red, TR green, BL blue, BR white read back exactly.
+The spec was materialised into the repo (`PLATEAU_BUILD_SPEC_V2.md`) and all SPEC_PATCH_01
+edits folded in (debugging protocol, screenshot-loop rewrite, §4.1/§6.3 patches, §11 don'ts,
+§10 P0-gate addendum + P1 rewrite).
 
 ### Proposed (not built — logged per §0.5)
 - Second shadow cascade (full §3.7 CSM).
 - Final-grade LUT as an *extended* palette (base + shadow tone) if flatness needs reinforcing.
 
 ### Next action
-**P1 — Assets.** Pull CC0 packs (Quaternius/Kenney/KayKit/Poly Pizza), run every mesh
-through `addSmoothNormals`, check silhouettes at 25 m, write the GLTF loader, log each
-licence in `CREDITS.md` as added. Note: Kenney/Poly Pizza hosts are network-blocked here
-(only GitHub raw reachable) — source packs from GitHub-hosted CC0 mirrors.
+**P1 — Assets. Blocked on a human step (§10).** Hassan drops CC0 GLBs in `assets/raw/`
+(Claude Code's network can't reach the asset hosts). **If `assets/raw/` is empty at session
+start, stop and say so — do not improvise a procedural stand-in** (P0's rock already
+validated §3.2/§3.4). Once populated: load, run `smoothNormals` over every mesh, check
+silhouettes at 25 m, log licences in `CREDITS.md`, pick a primary pack. First real bug to
+expect: the GLB loader hang (see Known issues).
 
 ---
 

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>PLATEAU — instrument self-test</title>
+    <style>html,body{margin:0;height:100%;overflow:hidden}canvas{display:block}</style>
+  </head>
+  <body>
+    <!-- Independent of the game. A known 2×2 colour grid rendered through WebGL,
+         so the shot/probe loop can assert it reads pixels correctly. If this
+         fails, the instrument is broken and nothing else this session is trusted. -->
+    <canvas id="c"></canvas>
+    <script>
+      const cv = document.getElementById('c');
+      cv.width = window.innerWidth; cv.height = window.innerHeight;
+      const gl = cv.getContext('webgl2', { preserveDrawingBuffer: true, antialias: false });
+      // Screen quadrants (top-left origin): TL red, TR green, BL blue, BR white.
+      // gl scissor origin is bottom-left, so top rows sit at y >= h/2.
+      function frame() {
+        const w = cv.width, h = cv.height, hw = (w / 2) | 0, hh = (h / 2) | 0;
+        gl.enable(gl.SCISSOR_TEST);
+        const quads = [
+          [0,   hh,      hw, h - hh, 1, 0, 0], // TL red
+          [hw,  hh,   w - hw, h - hh, 0, 1, 0], // TR green
+          [0,   0,       hw,     hh, 0, 0, 1], // BL blue
+          [hw,  0,    w - hw,     hh, 1, 1, 1], // BR white
+        ];
+        for (const [x, y, sw, sh, r, g, b] of quads) {
+          gl.scissor(x, y, sw, sh);
+          gl.clearColor(r, g, b, 1);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+        }
+        window.__ready = true;
+        requestAnimationFrame(frame);
+      }
+      frame();
+    </script>
+  </body>
+</html>

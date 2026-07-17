@@ -21,7 +21,8 @@ const vec = (k, d) => (params.has(k) ? params.get(k).split(',').map(Number) : d)
 
 const quality = params.get('quality') === 'low' ? 'low' : 'high';
 
-const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance',
+  preserveDrawingBuffer: params.has('probe') }); // probe reads back the canvas
 renderer.setPixelRatio(1);
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
