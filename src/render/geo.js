@@ -22,11 +22,15 @@ export function bakeFlat(geometry, base, opts = {}) {
   const colors = new Float32Array(count * 3);
 
   const c = new Color();
+  let jitter = 1;
   for (let f = 0; f < count; f += 3) {
     // One flat normal per triangle (average of its 3 vertex normals).
     let ny = (nrm.getY(f) + nrm.getY(f + 1) + nrm.getY(f + 2)) / 3;
     const shade = top * (0.5 + 0.5 * ny) + floor * (0.5 - 0.5 * ny);
-    const jitter = 1 + (Math.random() * 2 - 1) * variance;
+    // Re-roll once per quad face (every 2 triangles), not per triangle —
+    // otherwise a face's two triangles jitter independently and split
+    // visibly along their shared diagonal.
+    if (f % 6 === 0) jitter = 1 + (Math.random() * 2 - 1) * variance;
     c.setRGB(rgb[0], rgb[1], rgb[2]).multiplyScalar(shade * jitter);
     for (let k = 0; k < 3; k++) {
       colors[(f + k) * 3 + 0] = c.r;
