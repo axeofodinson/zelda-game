@@ -3,3 +3,4 @@ dist/
 .verify/
 *.log
 shots/.selftest-ok
+shots/live-*.png
