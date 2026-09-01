@@ -10,19 +10,36 @@ Do **not** try to source packs from GitHub-hosted CC0 mirrors — this was check
 One subfolder per pack, named `<author>-<pack>`:
 
     assets/raw/kenney-nature-kit/*.glb
-    assets/raw/kenney-nature-kit/Textures/colormap.png
+    assets/raw/kenney-nature-kit/palette.json
 
 P1 scans this folder **recursively** for `.glb` / `.gltf`. One subfolder per pack
 because `CREDITS.md` logs licence per pack, and a flat dump loses that mapping.
 
 ## Pack notes
 
-- **Kenney Nature Kit — primary.** 330 models, CC0, ships GLB directly. Materials
-  are a shared palette atlas: UVs index solid-colour regions of one texture map.
-  This means the Oklab LUT quantisation happens **once, offline, on the atlas PNG**
-  — every model then inherits the locked palette. No per-material or shader-side
-  quantisation needed. Do not re-compress the atlas; it bands, and banding in the
-  source corrupts the LUT mapping before the shader sees it.
+- **Kenney Nature Kit — primary.** 329 models, CC0, GLB, 3.6 MB total. Lives in
+  `kenney-nature-kit/`.
+
+  **Materials: there are no textures.** All 329 files contain zero images and zero
+  texture samplers — Kenney's shared colour atlas was flattened into per-material
+  `baseColorFactor` values at export. Verified 2026-09-02 by parsing every GLB.
+
+  What exists instead: **23 named materials resolving to 21 unique colours**, reused
+  across the whole kit (`grass` in 129 files, `dirt` in 98, `stone` in 89). Material
+  names are stable across models, so `woodBark` is the same value everywhere.
+
+  This makes the palette lock trivial. Quantise those 21 colours through the Oklab
+  LUT **once**, build a name→colour map, and assign by material name at load time.
+  No image processing, no per-model work, no shader-side quantisation. The full
+  table is committed at `kenney-nature-kit/palette.json`.
+
+  Two gotchas. `baseColorFactor` is **linear-space** per the glTF spec — do not
+  gamma-correct it before feeding the LUT. And the palette is genuinely mint/teal:
+  `grass` is (0.17, 0.85, 0.72), blue above red. That looks wrong but isn't —
+  confirmed against the kit's own `Isometric/` preview renders. Do not "fix" it.
+
+  Meshes carry `TEXCOORD_0` that nothing references, left over from the atlas
+  mapping. Harmless; ignore it.
 
 - **Quaternius nature packs — secondary, conversion required.** Ultimate Nature
   Pack (150 models) and Simple Nature Pack ship `.Blend` / `.FBX` / `.OBJ` only,
