@@ -1,0 +1,191 @@
+{
+  "_note": "Kenney Nature Kit GLB palette. baseColorFactor is LINEAR-space, per glTF spec. No textures exist in these files; the atlas was flattened to per-material colours at export. Quantise these 21 values through the Oklab LUT once, then assign by material name at load. Verified 2026-09-02 against Isometric/ preview renders.",
+  "source": "assets/raw/kenney-nature-kit/*.glb (329 files)",
+  "colorSpace": "linear",
+  "materials": {
+    "_defaultMat": {
+      "linear": [
+        1,
+        1,
+        1
+      ],
+      "usedInFiles": 54
+    },
+    "colorPurple": {
+      "linear": [
+        0.623529,
+        0.537255,
+        1
+      ],
+      "usedInFiles": 3
+    },
+    "colorRed": {
+      "linear": [
+        0.878431,
+        0.290196,
+        0.313725
+      ],
+      "usedInFiles": 11
+    },
+    "colorRedDark": {
+      "linear": [
+        0.756863,
+        0.211765,
+        0.231373
+      ],
+      "usedInFiles": 3
+    },
+    "colorTan": {
+      "linear": [
+        1,
+        0.682353,
+        0.435294
+      ],
+      "usedInFiles": 3
+    },
+    "colorWhite": {
+      "linear": [
+        1,
+        1,
+        1
+      ],
+      "usedInFiles": 3
+    },
+    "colorYellow": {
+      "linear": [
+        0.996078,
+        0.694118,
+        0.278431
+      ],
+      "usedInFiles": 3
+    },
+    "corn": {
+      "linear": [
+        0.960784,
+        0.737255,
+        0.392157
+      ],
+      "usedInFiles": 1
+    },
+    "dirt": {
+      "linear": [
+        0.886274,
+        0.513725,
+        0.341176
+      ],
+      "usedInFiles": 98
+    },
+    "dirtDark": {
+      "linear": [
+        0.709804,
+        0.407843,
+        0.270588
+      ],
+      "usedInFiles": 38
+    },
+    "grass": {
+      "linear": [
+        0.172549,
+        0.847059,
+        0.721569
+      ],
+      "usedInFiles": 129
+    },
+    "leafsDark": {
+      "linear": [
+        0.168627,
+        0.65098,
+        0.666667
+      ],
+      "usedInFiles": 38
+    },
+    "leafsFall": {
+      "linear": [
+        1,
+        0.572549,
+        0.254902
+      ],
+      "usedInFiles": 14
+    },
+    "leafsGreen": {
+      "linear": [
+        0.160784,
+        0.788235,
+        0.670588
+      ],
+      "usedInFiles": 23
+    },
+    "stone": {
+      "linear": [
+        0.721569,
+        0.886274,
+        0.909804
+      ],
+      "usedInFiles": 89
+    },
+    "stoneDark": {
+      "linear": [
+        0.603922,
+        0.709804,
+        0.729412
+      ],
+      "usedInFiles": 23
+    },
+    "water": {
+      "linear": [
+        0.690196,
+        0.956863,
+        1
+      ],
+      "usedInFiles": 18
+    },
+    "wood": {
+      "linear": [
+        1,
+        0.556863,
+        0.384314
+      ],
+      "usedInFiles": 31
+    },
+    "woodBark": {
+      "linear": [
+        0.886274,
+        0.513725,
+        0.341176
+      ],
+      "usedInFiles": 37
+    },
+    "woodBarkDark": {
+      "linear": [
+        0.8,
+        0.462745,
+        0.368627
+      ],
+      "usedInFiles": 33
+    },
+    "woodBirch": {
+      "linear": [
+        1,
+        0.94902,
+        0.870588
+      ],
+      "usedInFiles": 14
+    },
+    "woodDark": {
+      "linear": [
+        0.768627,
+        0.427451,
+        0.294118
+      ],
+      "usedInFiles": 11
+    },
+    "woodInner": {
+      "linear": [
+        0.960784,
+        0.843137,
+        0.733333
+      ],
+      "usedInFiles": 11
+    }
+  }
+}
