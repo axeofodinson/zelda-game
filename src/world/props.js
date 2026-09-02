@@ -4,13 +4,19 @@
 //
 // The kit has NO textures (verified over all 329 files, see assets/raw/README.md):
 // the shared atlas was flattened to per-material `baseColorFactor` at export, so
-// the palette lock is a name -> colour lookup, not image processing. Those
-// factors are LINEAR per the glTF spec and are fed to the LUT unmodified.
+// the palette lock is a name -> colour lookup, not image processing.
+//
+// P1b: that lookup is now SEMANTIC (see roles.js). The source `baseColorFactor`
+// values are no longer read at all — P1 measured that quantising them by Oklab
+// distance collapses the whole kit onto 6 entries, 4 of them sky-and-light
+// roles, and that no weighting fixes it. The pack states intent in the material
+// name; the map reads the name.
 import * as THREE from 'three';
 import { loadGLB, PACK_ROOT } from './glb.js';
 import { addSmoothNormals } from '../render/smoothNormals.js';
 import { makeHull } from '../render/outline.js';
 import { makeToonMaterial } from '../render/toon.js';
+import { assertCoverage, isExcluded, resolveRole, roleColour, EXCLUDED_MODELS } from './roles.js';
 
 export const PACK = {
   id: 'kenney-nature-kit',
@@ -29,23 +35,20 @@ export const PACK = {
 // Eight models spanning the kit's shape range and its material spread — canopy,
 // conifer, bush, boulder, standing stone, cliff block, stump, mushroom. This is
 // the §10 "silhouettes at 25 m" set.
+//
+// P1b: `mushroom_redTall` -> `mushroom_tanTall`. The red one is excluded on §2
+// accent grounds and the tan one is the same geometry, so the scan stays
+// comparable to P1's table.
 export const SILHOUETTE_SET = [
   'tree_default', 'tree_pineTallD', 'plant_bushLarge', 'rock_tallE',
-  'stone_largeD', 'cliff_blockSlope_rock', 'stump_round', 'mushroom_redTall',
+  'stone_largeD', 'cliff_blockSlope_rock', 'stump_round', 'mushroom_tanTall',
 ];
 
-// --- Palette lock (§3.2) ---------------------------------------------------
-// Quantise the pack's 21 unique colours through the Oklab LUT ONCE at load,
-// then assign by material name. Sampling the built Data3DTexture in JS is the
-// same operation the fragment shader does (nearest, half-texel offset) — for a
-// size-N LUT, nearest lands on texel round(c * (N-1)).
-function lutLookup(lut, r, g, b) {
-  const n = lut.__size;
-  const data = lut.image.data;
-  const i = (x) => Math.min(n - 1, Math.max(0, Math.round(THREE.MathUtils.clamp(x, 0, 1) * (n - 1))));
-  const idx = (i(r) + i(g) * n + i(b) * n * n) * 4;
-  return new THREE.Color(data[idx] / 255, data[idx + 1] / 255, data[idx + 2] / 255);
-}
+// --- Palette lock (§3.2, P1b semantics) ------------------------------------
+// No LUT sampling, no distance metric. `roles.js` maps material name -> §2 role
+// and throws on anything it does not know, so an unrecognised material is a
+// build failure with a name in it rather than a prop that silently comes out
+// the colour of the sky.
 
 // The pack manifest (scripts/manifest.mjs, `npm run assets`) — a browser cannot
 // list a directory, so the README's "scan recursively" happens at tooling time.
@@ -60,30 +63,34 @@ export function loadManifest() {
   return _manifestPromise;
 }
 
-// Every model in a pack, in manifest order.
+// Every loadable model in a pack, in manifest order. The §2 exclusions are
+// filtered here rather than at the call site, so "load the pack" cannot quietly
+// mean "load the pack plus the red flowers".
 export async function packModels(pack = PACK.id) {
   const m = await loadManifest();
   if (!m.packs[pack]) throw new Error(`pack "${pack}" not in manifest`);
-  return m.packs[pack].models;
+  return m.packs[pack].models.filter((n) => !isExcluded(n));
+}
+
+// The excluded names, for reporting.
+export function excludedModels() {
+  return [...EXCLUDED_MODELS];
 }
 
 let _packPromise = null;
 
-// Load palette.json and lock all 21 colours. Idempotent — one fetch per session.
-export function loadPackPalette(lut) {
+// palette.json is no longer a colour source — the map is. It is still fetched,
+// as the pack's own declaration of which materials exist: `assertCoverage`
+// fails the load if the pack carries a material with no role. A pack update
+// that adds one is caught here, not at whatever framing first shows it.
+export function loadPackPalette() {
   if (_packPromise) return _packPromise;
   _packPromise = fetch(`${PACK_ROOT}palette.json`).then(async (res) => {
     if (!res.ok) throw new Error(`palette.json ${res.status}`);
     const json = await res.json();
-    const locked = new Map();
-    const table = [];
-    for (const [name, m] of Object.entries(json.materials)) {
-      const [r, g, b] = m.linear;              // LINEAR — do not gamma-correct
-      const c = lutLookup(lut, r, g, b);
-      locked.set(name, c);
-      table.push({ name, files: m.usedInFiles, src: [r, g, b], locked: `#${c.getHexString()}` });
-    }
-    return { json, locked, table };
+    const names = Object.keys(json.materials);
+    assertCoverage(names);
+    return { json, names };
   });
   return _packPromise;
 }
@@ -92,7 +99,7 @@ export function loadPackPalette(lut) {
 // Every mesh: drop the atlas leftovers, bake smooth normals (§3.4 — without
 // them the inverted hull tears open at every hard corner), swap the glTF
 // material for a palette-locked toon material, attach a hull.
-function prepareMesh(mesh, { lut, locked, stats }) {
+function prepareMesh(mesh, { model, lut, stats }) {
   const geo = mesh.geometry;
 
   // Unreferenced TEXCOORD_0 left over from the atlas mapping (§ assets README).
@@ -101,17 +108,21 @@ function prepareMesh(mesh, { lut, locked, stats }) {
 
   addSmoothNormals(geo);                       // §3.4, every mesh, always
 
+  // §3.2 P1b — name -> role -> §2 colour. `resolveRole` throws on anything it
+  // does not know; the throw propagates out of `loadProp` and lands in
+  // `loadProps().failed`, which the rig prints. Loud, not silent.
   const srcName = mesh.material?.name || '_defaultMat';
-  const colour = locked.get(srcName);
-  if (!colour) stats.unmapped.add(srcName);
+  const role = resolveRole(model, srcName);
+  const colour = roleColour(role);
   stats.materials.set(srcName, (stats.materials.get(srcName) || 0) + 1);
+  stats.roles.set(role, (stats.roles.get(role) || 0) + 1);
 
   // Discard the glTF material outright (§3.2 / §11: no MeshStandardMaterial).
   mesh.material?.dispose?.();
   mesh.material = makeToonMaterial({
-    color: colour || new THREE.Color(0xffffff),
+    color: colour,
     lut,
-    lutMix: 0,   // already locked in JS above — do not snap a second time
+    lutMix: 0,   // the colour IS a palette entry — do not snap a palette entry
   });
 
   mesh.castShadow = true;
@@ -123,16 +134,17 @@ function prepareMesh(mesh, { lut, locked, stats }) {
 
 // Load one model, fully prepared and scaled to world metres. Returns a Group.
 export async function loadProp(name, { lut, scale = PACK.scale } = {}) {
-  const { locked } = await loadPackPalette(lut);
+  if (isExcluded(name)) throw new Error(`model "${name}" is excluded (§2 accent rule) and must not be loaded`);
+  await loadPackPalette();                       // coverage assert, once per session
   const { gltf, info } = await loadGLB(name);
-  const stats = { meshes: 0, tris: 0, uvsDropped: 0, materials: new Map(), unmapped: new Set() };
+  const stats = { meshes: 0, tris: 0, uvsDropped: 0, materials: new Map(), roles: new Map() };
 
   // Collect first, prepare second: `prepareMesh` parents a hull onto each mesh,
   // and traverse() would walk straight into that new child and hull the hull.
   const root = gltf.scene;
   const meshes = [];
   root.traverse((o) => { if (o.isMesh && !o.userData.isHull) meshes.push(o); });
-  for (const m of meshes) prepareMesh(m, { lut, locked, stats });
+  for (const m of meshes) prepareMesh(m, { model: name, lut, stats });
 
   const group = new THREE.Group();
   group.name = name;

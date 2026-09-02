@@ -6,7 +6,8 @@
 //   quality=low | rock=1 (the §3.2 import test) | orbit=1
 //   glb=<model>   P1 loader smoke test: fetch+parse one GLB, gate __ready on it
 //   p1=<dist>     P1 silhouette rig: the pack lineup on flat ground at <dist> m
-//   set=a,b,c     override the models in the p1 rig (set=all loads all 329)
+//   set=a,b,c     override the models in the p1 rig (set=all loads the whole
+//                 pack: 316 of 329, the 13 §2 exclusions filtered out)
 import * as THREE from 'three';
 import { sky, makeSkyDome } from './render/sky.js';
 import { buildPaletteLUT } from './render/lut.js';
@@ -17,7 +18,7 @@ import { Pipeline } from './render/pipeline.js';
 import { buildTerrain, heightAt, buildTerrainLUT } from './world/terrain.js';
 import { makeRock } from './world/testprops.js';
 import { loadGLB } from './world/glb.js';
-import { loadProps, placeProp, packModels, SILHOUETTE_SET, PACK } from './world/props.js';
+import { loadProps, placeProp, packModels, excludedModels, SILHOUETTE_SET, PACK } from './world/props.js';
 import { P } from './render/palette.js';
 
 const params = new URLSearchParams(location.search);
@@ -154,17 +155,52 @@ if (p1) {
       if (all) return;
       const s = prop.userData.stats;
       const size = prop.userData.size;
-      console.log(`[plateau] prop ${prop.name}  ${size.x.toFixed(2)}x${size.y.toFixed(2)}x${size.z.toFixed(2)}m  meshes=${s.meshes} tris=${s.tris} uvDropped=${s.uvsDropped} mats=${[...s.materials.keys()].join('+')}${s.unmapped.size ? ' UNMAPPED=' + [...s.unmapped].join(',') : ''}`);
+      console.log(`[plateau] prop ${prop.name}  ${size.x.toFixed(2)}x${size.y.toFixed(2)}x${size.z.toFixed(2)}m  meshes=${s.meshes} tris=${s.tris} uvDropped=${s.uvsDropped} mats=${[...s.materials.keys()].join('+')} roles=${[...s.roles.keys()].join('+')}`);
     });
     for (const f of failed) console.error(`[plateau] prop FAILED ${f.name}: ${f.error}`);
+
+    // §10 instrument hook. The silhouette scan (scripts/scan.mjs) needs to know
+    // which columns belong to which prop, and pixel segmentation cannot tell a
+    // sub-metre prop from the ground it stands on. Project each prop's world
+    // bounding box to screen instead — exact, and it names the rows.
+    window.__props = () => props.map((prop) => {
+      const box = new THREE.Box3().setFromObject(prop);
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (let i = 0; i < 8; i++) {
+        const v = new THREE.Vector3(
+          i & 1 ? box.max.x : box.min.x,
+          i & 2 ? box.max.y : box.min.y,
+          i & 4 ? box.max.z : box.min.z
+        ).project(camera);
+        const px = (v.x * 0.5 + 0.5) * renderer.domElement.width;
+        const py = (-v.y * 0.5 + 0.5) * renderer.domElement.height;
+        x0 = Math.min(x0, px); x1 = Math.max(x1, px);
+        y0 = Math.min(y0, py); y1 = Math.max(y1, py);
+      }
+      return { name: prop.name, x0: Math.round(x0), x1: Math.round(x1), y0: Math.round(y0), y1: Math.round(y1) };
+    });
     const tot = props.reduce((a, p) => {
       a.meshes += p.userData.stats.meshes; a.tris += p.userData.stats.tris;
       a.uv += p.userData.stats.uvsDropped;
-      for (const m of p.userData.stats.unmapped) a.unmapped.add(m);
       for (const m of p.userData.stats.materials.keys()) a.mats.add(m);
+      for (const [r, n] of p.userData.stats.roles) {
+        const e = a.roles.get(r) || { meshes: 0, files: 0 };
+        e.meshes += n; e.files += 1; a.roles.set(r, e);
+      }
       return a;
-    }, { meshes: 0, tris: 0, uv: 0, mats: new Set(), unmapped: new Set() });
-    console.log(`[plateau] pack ${PACK.id} scale=${PACK.scale} loaded=${props.length}/${names.length} meshes=${tot.meshes} tris=${tot.tris} uvDropped=${tot.uv} materials=${tot.mats.size} unmapped=${tot.unmapped.size ? [...tot.unmapped].join(',') : 'none'}`);
+    }, { meshes: 0, tris: 0, uv: 0, mats: new Set(), roles: new Map() });
+    const ex = excludedModels();
+    console.log(`[plateau] pack ${PACK.id} scale=${PACK.scale} loaded=${props.length}/${names.length} excluded=${ex.length} meshes=${tot.meshes} tris=${tot.tris} uvDropped=${tot.uv} materials=${tot.mats.size}`);
+
+    // §3.2 P1b — the palette-entry histogram. The whole point of the semantic
+    // map is which of §2's fourteen the world actually wears, so print it as
+    // data rather than leaving it to a screenshot.
+    const hist = [...tot.roles.entries()].sort((a, b) => b[1].meshes - a[1].meshes);
+    for (const [role, e] of hist) {
+      console.log(`[plateau] role ${role.padEnd(8)} ${P[role]}  meshes=${e.meshes} files=${e.files}`);
+    }
+    const unused = Object.keys(P).filter((k) => !tot.roles.has(k));
+    console.log(`[plateau] roles used=${hist.map(([r]) => r).join(',')} unused=${unused.join(',')}`);
     gate.done = true;
   })).catch((e) => { console.error('[plateau] pack FAILED', e.message); gate.done = true; });
 }

@@ -1,7 +1,15 @@
 // §3.2 — Palette lock. A 32³ LUT built at load: every source colour maps to the
 // nearest of the 14 palette entries by OKLAB distance (not RGB — RGB
-// nearest-neighbour picks arbitrary garbage). Three packs go in, one game comes
-// out. Banding is not a bug; flat colour is the brief.
+// nearest-neighbour picks arbitrary garbage). Banding is not a bug; flat colour
+// is the brief.
+//
+// P1b scope note: this is no longer how PACK ALBEDO is unified. "Three packs go
+// in, one game comes out" now runs through `world/roles.js`, a material
+// name->role map, because P1 measured nearest-neighbour collapsing the Kenney
+// kit onto 6 entries with foliage landing on the literal sky colour — see that
+// file's header for the numbers. The LUT stays as the shader-side lock for
+// colours that are already authored in-palette (terrain, the P0 test boxes) and
+// as the §3.7 grade machinery's hook.
 import * as THREE from 'three';
 import { PALETTE_LIST } from './palette.js';
 
@@ -27,7 +35,17 @@ function nearestPalette(r, g, b, ok) {
   for (let i = 0; i < PAL_OK.length; i++) {
     const p = PAL_OK[i];
     const dl = ok[0] - p[0], da = ok[1] - p[1], db = ok[2] - p[2];
-    // Lightness weighted slightly under chroma: keep hue families together.
+    // 0.9 is a nominal de-weight of lightness and nothing more: it does NOT
+    // "keep hue families together", which is what this comment used to claim.
+    // Oklab L spans 0.25-0.97 across the cube while the §2 palette's chroma
+    // tops out at 0.18, so dL² outweighs da²+db² by ~25x and the metric is
+    // lightness-first whatever this coefficient is. P1 measured the
+    // consequence and P1b acted on it (see world/roles.js): source albedos
+    // brighter than every surface entry can only land on the sky-and-light
+    // ones. Dropping to 0.0 does not rescue it either — it sends the kit's
+    // cyan foliage to `water`. Left as-is because the pack no longer comes
+    // through here; what does (§2 colours, terrain, test boxes) is already
+    // near its own entry, where the weighting is inert.
     const d = dl * dl * 0.9 + da * da + db * db;
     if (d < bestD) { bestD = d; best = i; }
   }

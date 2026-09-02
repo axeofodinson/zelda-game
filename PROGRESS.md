@@ -215,16 +215,14 @@ silhouettes and style are correct — but it will fail **P7's colour gate**, whi
 wants a dominant saturated hue that is not the sky's.
 
 ### Known issues
-- The palette collapse above. Live, unfixed, by decision.
-- **`cloth` is reachable as an albedo target.** §2 says `cloth` is the player and
-  the ONLY red in the world, but the LUT can map any reddish source onto it —
-  `colorRedDark` lands on `cloth` under a hue-leaning metric, and `colorRed` (11
-  files) is one weight tweak away. Latent, not currently firing.
-- `src/render/lut.js`'s distance comment says "Lightness weighted slightly under
-  chroma: keep hue families together", but `0.9·dL² + da² + db²` cannot do that:
-  Oklab L spans 0.25–0.97 while our palette's chroma tops out at 0.18, so dL²
-  dominates by ~25×. Code and stated intent disagree. Not changed — every
-  alternative weighting tested was worse (see above).
+- ~~The palette collapse above. Live, unfixed, by decision.~~ **Fixed in P1b.**
+- ~~**`cloth` is reachable as an albedo target.**~~ **Fixed in P1b** — structurally
+  impossible now, not avoided by convention. §2 says `cloth` is the player and the
+  ONLY red in the world, but the LUT could map any reddish source onto it:
+  `colorRedDark` landed on `cloth` under a hue-leaning metric and `colorRed` (11
+  files) was one weight tweak away.
+- ~~`src/render/lut.js`'s distance comment contradicts its code.~~ **Fixed in P1b**
+  (comment corrected; the code is unchanged and still lightness-first).
 - `plant_bushLarge` (0.97 m) is at the resolution limit at 25 m; sub-metre props
   will need an LOD or cull rule, not a hull fix.
 - The single-file ship target (`vite-plugin-singlefile`) will not inline
@@ -237,21 +235,237 @@ wants a dominant saturated hue that is not the sky's.
   its own hull mesh** — 2 draw calls per tuft, so 4,000 tufts = 8,000 draw calls.
   Will not scale. Needs `InstancedMesh` with a per-instance hull pass. §3.8's 80k
   blades are a separate procedural system; this is about the kit's tuft models.
-- **A semantic name→role map** as the answer to the palette collapse:
-  `grass`/`leafsGreen`→`P.grass`, `leafsDark`→`P.grassLo`, `woodBark`→`P.wood`,
-  `dirt`→`P.soil`, `stone`→`P.rock`, `stoneDark`→`P.rockLo`, `water`→`P.water`.
-  The kit's material names are stable across all 329 files, so this is reliable and
-  cheap. It is *not* nearest-neighbour, so it is outside §3.2 as written — hence
-  logged, not built. **This is the decision worth making before P5.**
-- Excluding `ink`, `sun`, `sear` and `cloth` from albedo LUT targets on role
-  grounds (see Known issues).
+- ~~**A semantic name→role map** as the answer to the palette collapse.~~ **Built in
+  P1b** — see below.
+- ~~Excluding `ink`, `sun`, `sear` and `cloth` from albedo LUT targets on role
+  grounds.~~ **Built in P1b** as `ALBEDO_ROLES`, asserted at module load.
 - Second shadow cascade (carried over from P0).
+
+
+
+---
+
+## P1b — Semantic palette map — ✅ gate met
+
+P1 applied §3.2's palette lock exactly as written — nearest-in-Oklab against
+`PALETTE_LIST` — and measured the result: 6 of 14 entries absorbed all 329
+models, 4 of those 6 were sky-and-light roles, and foliage locked to the literal
+sky colour. P1 also established the cause was structural rather than tunable.
+P1b replaces the distance metric with a **material name → §2 role map**. §3.2's
+goal (unify roles across packs) is kept; its stated mechanism is not.
+
+Done now rather than before P5 because every phase between here and there gates
+on screenshots, and tuning light, shadow and framing against foliage-as-sky
+means gating on an image that is wrong in the most load-bearing way.
+
+**Gate evidence:** `shots/p1b-silhouette-25.png` · `p1b-roles-25.png` ·
+`p1b-canopy.png` · `p1b-pack-all.png` · `p1b-p0-recheck.png`
+
+### Files (P1b)
+- `src/world/roles.js` — **new.** The map, the exclusions, the recolours, the
+  `_defaultMat` prefix rules, and the assertions. Nothing in it falls back.
+- `src/world/props.js` — `prepareMesh` resolves name→role→colour; `packModels`
+  filters the exclusions; `loadPackPalette` is now a coverage check, not a
+  colour source. `SILHOUETTE_SET`: `mushroom_redTall` → `mushroom_tanTall`.
+- `src/main.js` — palette-entry histogram on the pack load; `window.__props`
+  instrument hook (screen-space prop bounds for the scanner).
+- `src/render/lut.js` — **comment only**, no code change (proved below).
+- `scripts/roles.mjs` + `npm run roles` — **new instrument.**
+- `scripts/scan.mjs` + `npm run scan` — **new instrument.**
+
+### The map
+Names and usage cross-checked against `assets/raw/kenney-nature-kit/palette.json`
+*and* an independent parse of all 329 GLB JSON chunks — the counts match exactly.
+
+| material | files | role | | material | files | role |
+|---|---|---|---|---|---|---|
+| `grass` | 129 | `grass` | | `stoneDark` | 23 | `rockLo` |
+| `dirt` | 98 | `soil` | | `water` | 18 | `water` |
+| `stone` | 89 | `rock` | | `leafsFall` | 14 | `soil` |
+| `dirtDark` | 38 | `rockLo` | | `woodBirch` | 14 | `rock` |
+| `leafsDark` | 38 | `grassLo` | | `woodDark` | 11 | `rockLo` |
+| `woodBark` | 37 | `wood` | | `woodInner` | 11 | `wood` |
+| `woodBarkDark` | 33 | `rockLo` | | `colorTan` | 3 | `soil` |
+| `wood` | 31 | `wood` | | | | |
+| `leafsGreen` | 23 | `grass` | | | | |
+
+`_defaultMat` (54 files) is core terrain geometry, not junk, and is pure white —
+which is why nearest-neighbour was sending all of it to `sear`. It spans rock,
+wood, foliage and crops, so it resolves by model-name prefix:
+
+    rock_* stone_* cliff_* statue_* path_stone* pot_* mushroom_*  → rock
+    path_wood* fence_* sign bed_floor tent_*                      → wood
+    tree_*                                                        → grassLo
+    crops_*                                                       → soil
+
+**Excluded — not loaded** (13): `flower_red{A,B,C}`, `flower_yellow{A,B,C}`,
+`flower_purple{A,B,C}`, `mushroom_red{,Group,Tall}`, `crops_cornStageD`.
+Flowers carry the accent materials and §2 has no accent slot — the one saturated
+accent is `cloth`, reserved for the player. Red mushrooms go because
+`mushroom_tan*` is the same three shapes in a colour that does not fight §2.
+
+**Recoloured, not excluded.** `colorRed` is on eleven models, only three of which
+are flowers; it is also on all four `tent_*` and on `lily_large`. Tents are
+unique geometry and worth keeping, and a red tent on a ridgeline competes with
+"the player is the only red thing in the world" directly. Brown canvas does not,
+and is more plausible regardless.
+
+    tent_*      colorRed → wood     colorRedDark → rockLo
+    lily_large  colorRed → grassLo
+
+### Two holes in the map, found by verification and filled
+The brief's map does not cover four of the 316 loaded models. Both gaps are on
+models the brief explicitly *keeps*, so they were filled rather than left to
+fail; flagged here because they are decisions, not transcription.
+1. **`colorTan` had no role.** It is the cap of `mushroom_tan{,Group,Tall}` (16 t
+   of cap over a 32 t stem). Given `soil` — the same call `leafsFall` gets, same
+   hue family, and it reads as a brown cap against a pale stem.
+2. **`_defaultMat` matched no prefix on `mushroom_tan*` and `tent_smallClosed`.**
+   Added `mushroom_` → `rock` (the stem; the call `statue_*` and `path_stone*`
+   already get for white structural geometry) and `tent_` → `wood` (4 t out of
+   220 on that model, and the rest of the tent is `wood`).
+
+Everything else the brief left unlisted checked out as genuinely excluded-only:
+`colorPurple`, `colorYellow`, `colorWhite` and `corn` appear on no loaded model.
+They are named in `EXCLUDED_ONLY_MATERIALS` so "deliberately roleless" is
+distinguishable from "nobody noticed", and seeing one on a loaded model throws.
+
+### Hard assertions — verified firing, not assumed
+All at module load, so a bad map fails the build rather than a playtest.
+- **No pack material may resolve to `cloth`.** Verified: pointing `MATERIAL_ROLE.grass`
+  at `cloth` throws *"§2 violation: … `cloth` is the player and the ONLY red in the
+  world"*.
+- **Nor to any sky or light role.** `ALBEDO_ROLES` allows only the eight surface
+  entries. Verified: pointing `tree_*` at `skyDay` throws.
+- **No fallback anywhere.** An unmapped material, an unmatched `_defaultMat`, an
+  excluded-only material on a loaded model, an excluded model, or a pack material
+  with no role — five failure paths, all verified throwing by
+  `npm run roles`'s own self-test (same discipline as `shot --selftest`: a map
+  whose failure path is broken is the silent fallback wearing a seatbelt).
+
+### Verify — the instrument, not the eye
+
+**1. Silhouette scan at 25 m — hull continuity holds.** P0 and P1 both gated on
+this and neither committed the scanner, so `scripts/scan.mjs` is committed now
+and P1's numbers were re-measured with it. Baseline is a worktree at `9dc76ae`
+(merged P1) scanned by the *identical* scanner — the comparison is paired, not
+against P1's published table. Cross-check that the scanner is sound: on the
+baseline it reproduces P1's table closely (`mushroom` 64.9 vs 64.9,
+`cliff_blockSlope_rock` 99.3 vs 101.4, `stone_largeD` 78.3 vs 81.8); it scans the
+full projected width rather than P1's 41 columns, which is where the rest of the
+spread comes from.
+
+| model | darkMin P1 → P1b | fillMed P1 → P1b | drop(bg) P1 → P1b |
+|---|---|---|---|
+| tree_default | 57.6 → 57.6 | 177.9 → 163.0 | 0 → 0 |
+| tree_pineTallD | 55.7 → 52.9 | 146.2 → 110.2 | 0 → 0 |
+| plant_bushLarge | 63.1 → 63.1 | 128.9 → 117.9 | 0 → 0 |
+| rock_tallE | 74.0 → 71.3 | 156.8 → 156.8 | 55 → 43 |
+| stone_largeD | 78.3 → 73.1 | 221.7 → 138.7 | 49 → 49 |
+| cliff_blockSlope_rock | 99.3 → 87.7 | 173.3 → 108.4 | 0 → 0 |
+| stump_round | 64.1 → 64.1 | 156.8 → 100.1 | 0 → 0 |
+| mushroom_(red→tan)Tall | 64.9 → 64.9 | 152.5 → 105.3 | 0 → 0 |
+
+**Read: the ink line did not move.** `darkMin` is identical or *darker* on every
+one of the eight (0 to −11.6), never brighter, so no silhouette lost contrast;
+the band sits where P0's verified test rock (69.8) sits. `drop(bg)` — separation
+from the backdrop, the metric that actually detects a torn hull — is unchanged or
+better everywhere. What did move is `fillMed`: interiors are markedly darker now,
+which is the entire point (a canopy is no longer sky-bright). That narrows the
+ink-vs-*interior* contrast, so `drop(fill)` ticks up a few columns per model —
+a consequence of the fix, not a defect, and `drop(fill)` was already flagged in
+P1 as the softer of the two metrics.
+
+**2. Canopy vs sky — 5.0× better separated.** `tree_plateau` (`leafsGreen` +
+`woodBark`), same rig, same pixel, both revisions:
+
+| | canopy lit | canopy shadow band | sky |
+|---|---|---|---|
+| P1 | `(121,196,201)` | `(61,142,194)` | `(126,200,227)` |
+| P1b | `(107,187,84)` | `(55,136,83)` | `(126,200,227)` |
+
+P1's lit canopy is `ΔE_oklab = 0.0375` from the sky it stands against —
+separated by its ink line alone, exactly as P1 reported (their probe read
+`(122,196,201)`; this reproduces it to one count). P1b's reads **0.1886, a 5.0×
+gain**; the shadow band goes 0.1789 → 0.2595. The canopy is `P.grass` `#6DBE45`
+under the sun ramp, unambiguously green and unambiguously not the sky.
+
+**3. Palette-entry histogram — 7 roles in use, all of them surface roles.**
+All 316 models loaded in the browser, 0 failed, 13 excluded.
+
+| role | hex | meshes | files |
+|---|---|---|---|
+| `grass` | `#6DBE45` | 144 | 142 |
+| `rock` | `#A89078` | 143 | 123 |
+| `soil` | `#8B5E3C` | 116 | 116 |
+| `rockLo` | `#5C4A3D` | 109 | 108 |
+| `wood` | `#7A5230` | 90 | 64 |
+| `grassLo` | `#2F7A3E` | 43 | 40 |
+| `water` | `#3FA9C9` | 18 | 18 |
+
+**Unused: `ink`, `skyDay`, `skyDusk`, `sun`, `sear`, `cloth`, `metal`.** Sky and
+light roles now appear on nothing but sky and light, and `cloth` appears on
+nothing but the player. `grass`, `grassLo`, `soil`, `wood`, `rockLo`, `rock` and
+`water` — the seven P1 asked for — are all in use; every one of them was used by
+*nothing* before. `metal` is unused by this pack but stays a legal target for the
+next one. `npm run roles` computes the same histogram offline from the GLB JSON
+chunks and agrees (it counts material declarations, the browser counts mesh
+primitives, hence 661 vs 663).
+
+**4. P0 rig regression — bit-identical.** The only `src/render/*` change is a
+comment, and that is provable rather than assertable: rendering P0's rig
+(`?rock=1`, default framing) on both revisions and hashing the full canvas
+readback gives `sha256 46f3099…81db83` on **both**, over all 921,600 pixels.
+
+### Bugs found and fixed
+1. **The scan instrument could silently measure the wrong repository.** A vite
+   left from an earlier run holds the port, `--strictPort` makes the new one
+   exit, and the script — which resolves its server start on a *timeout* —
+   scanned whatever the stale server was serving. It surfaced as a "baseline"
+   run at the previous revision handing back the current tree's numbers,
+   identical to the decimal. `scan.mjs` now refuses to start on a busy port,
+   prints the tree it is serving, and takes `--port`. `shot.mjs` and `probe.mjs`
+   share the pattern and are worth the same guard.
+2. **A comment edit silently deleted the line it documented.** Rewriting
+   `lut.js`'s distance comment dropped `const d = dl*dl*0.9 + …`. Caught by
+   reading the file back before running anything. The pixel-hash in Verify 4 is
+   what proves the final state is a comment-only change.
+
+### Decisions
+- **The map is the mechanism; §3.2's text is not.** §3.2 specifies nearest-in-Oklab
+  as the *means* to "three packs go in, one game comes out". P1 established the
+  means cannot reach the end for this pack. The end is kept.
+- **Nothing falls back.** A fallback to nearest-neighbour on an unknown material
+  reintroduces the exact bug this replaces, and does it silently — the failure
+  mode would be one prop the colour of the sky in a scene of 300.
+- **The LUT stays.** It is no longer how pack albedo is unified, but it is still
+  the shader-side lock for already-in-palette colours (terrain, the P0 boxes) and
+  the §3.7 grade hook. `lutMix` is 0 on pack materials: the colour *is* a palette
+  entry, so snapping it again is a no-op at best.
+- **Exclusions are filtered in `packModels()`**, not at call sites, so "load the
+  pack" cannot quietly come to mean "load the pack plus the red flowers".
+
+### Known issues
+- `plant_bushLarge` (0.97 m) is still at the resolution limit at 25 m — unchanged
+  by P1b; sub-metre props need an LOD or cull rule, not a hull fix.
+- The single-file ship target won't inline `assets/raw/**`. P7 problem.
+- One transient `404` appeared on a single `shot` run and did not reproduce on
+  the identical command; every subsequent run is clean. Noted, not chased.
+
+### Flagged for later — NOT built (§0.5)
+- **Grass tufts need GPU instancing.** Carried forward from P1 unchanged and
+  deliberately not built: `grass` (132 t), `grass_large` (224 t), `grass_leafs`
+  (36 t), `grass_leafsLarge` (144 t) go through the standard prop pipeline as an
+  individual mesh **plus its own hull mesh** — 2 draw calls per tuft, so 4,000
+  tufts = 8,000 draw calls. Needs `InstancedMesh` with a per-instance hull pass.
+  §3.8's 80k blades are a separate procedural system.
+- The busy-port guard from Bugs 1 belongs in `shot.mjs` and `probe.mjs` too.
+- Second shadow cascade (carried from P0).
 
 ### Next action
 **P2 — Movement.** Controller, camera, sprint, stamina wheel, climbing. Mixamo +
-`stylize()` + foot IK. Rig quality gets judged there, not in P1 — the Nature Kit
-carries no skins or clips at all.
-
+`stylize()` + foot IK. Rig quality gets judged there — the Nature Kit carries no
+skins or clips at all.
 
 
 ## §12 answers (recorded)

@@ -9,7 +9,9 @@
     "preview": "vite preview --port 4173",
     "shot": "node scripts/shot.mjs",
     "probe": "node scripts/probe.mjs",
-    "assets": "node scripts/manifest.mjs"
+    "assets": "node scripts/manifest.mjs",
+    "roles": "node scripts/roles.mjs",
+    "scan": "node scripts/scan.mjs"
   },
   "devDependencies": {
     "playwright": "^1.48.0",
