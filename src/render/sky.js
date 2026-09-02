@@ -110,7 +110,12 @@ export const sky = {
 // A big inward-facing dome that reproduces sample() in-shader for the
 // background. Kept in sync with the JS model through the shared uniforms.
 export function makeSkyDome() {
-  const geo = new THREE.SphereGeometry(4000, 32, 16);
+  // Radius sits well inside the 4000 far plane AND the dome re-centres on the
+  // camera every frame. Both are needed: a dome fixed at the origin with radius
+  // == far gets its forward cap clipped by the far plane the moment the camera
+  // leaves the origin, punching a black hole in the sky that grows with the
+  // offset (found in P1 — a camera 200 m out lost a 35 deg cone of sky).
+  const geo = new THREE.SphereGeometry(3000, 32, 16);
   const mat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
@@ -140,6 +145,12 @@ export function makeSkyDome() {
   });
   const dome = new THREE.Mesh(geo, mat);
   dome.frustumCulled = false;
+  // onBeforeRender runs before three computes modelViewMatrix, but after the
+  // scene's matrix update — so the world matrix has to be refreshed by hand.
+  dome.onBeforeRender = (renderer, scene, cam) => {
+    dome.position.copy(cam.position);
+    dome.updateMatrixWorld(true);
+  };
   dome.renderOrder = -1000;
   dome.userData.isSky = true; // excluded from prepass + shadow passes
   return dome;
