@@ -8,9 +8,10 @@ boxes and a procedurally-generated test rock (original, CC0-equivalent, not ship
 content). Real CC0 packs (Quaternius, Kenney, KayKit, Poly Pizza CC0) arrive in P1
 and every one will be logged here with its pack name, author, source URL, and licence.
 
-> Environment note: the usual CC0 hosts (kenney.nl, poly.pizza) are network-blocked
-> in this build environment; only GitHub raw is reachable. P1 sources packs from
-> GitHub-hosted CC0 mirrors.
+> Environment note: the usual CC0 hosts (kenney.nl, quaternius.com, itch.io,
+> poly.pizza) are unreachable from the build environment. Packs are downloaded
+> by hand and pushed to `assets/raw/`. GitHub-hosted mirrors were checked and
+> rejected — stale, and no GLB. See `assets/raw/README.md`.
 
 ## Audio
 None yet. (Overworld is silent by design — §7.6. Only a boss track + ambience later.)
