@@ -60,9 +60,23 @@ function assertPortFree() {
   });
 }
 
+// `npx vite` is a shell wrapper around the real server, so SIGTERM to the child
+// kills the wrapper and orphans vite, which then holds the port and trips
+// `assertPortFree` on the NEXT run. Own the whole process group and kill the
+// group. Registered on exit paths too, so a crashed scan does not leak either.
+let _group = null;
+function stopServer() {
+  if (_group === null) return;
+  try { process.kill(-_group, 'SIGTERM'); } catch { /* already gone */ }
+  _group = null;
+}
+process.on('exit', stopServer);
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { stopServer(); process.exit(1); });
+
 function startServer() {
   const proc = spawn('npx', ['vite', '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'],
-    { cwd: new URL('..', import.meta.url).pathname, env: process.env });
+    { cwd: new URL('..', import.meta.url).pathname, env: process.env, detached: true });
+  _group = proc.pid;
   return new Promise((resolve) => {
     let out = '';
     const onData = (d) => { out += d.toString(); if (/Local:.*http/.test(out) || /ready in/.test(out)) resolve(proc); };
@@ -72,6 +86,10 @@ function startServer() {
 }
 
 const lum = (r, g, b) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+// P0's verified hull band, restated here so the scan checks itself rather than
+// handing a number to a human to compare. P0's §3.2 test rock measured 69.8.
+const P0_BAND = [61, 101];
 const med = (a) => (a.length ? [...a].sort((x, y) => x - y)[a.length >> 1] : NaN);
 
 function analyse(px, w, h, bounds) {
@@ -109,15 +127,20 @@ function analyse(px, w, h, bounds) {
     }
 
     const r1 = (n) => (Number.isFinite(n) ? n.toFixed(1) : '-');
+    // `darkMin` is a single-pixel extreme by construction, so on its own it
+    // cannot distinguish "the whole line is darker" from "one column caught two
+    // ink lines crossing". `subLo` counts the columns actually below P0's floor.
+    const subLo = dark.filter((d) => d < P0_BAND[0]).length;
     return { name: b.name, cols,
       darkMin: r1(Math.min(...dark)), darkMed: r1(med(dark)),
-      fillMed: r1(med(fill)), bgMed: r1(med(bg)), dropFill, dropBg };
+      fillMed: r1(med(fill)), bgMed: r1(med(bg)), dropFill, dropBg,
+      subLo, subLoPct: cols ? Math.round((subLo / cols) * 100) : 0 };
   });
 }
 
 async function main() {
   await assertPortFree();
-  const server = await startServer();
+  await startServer();
   await sleep(1000);
   const browser = await chromium.launch(launchOpts);
   const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
@@ -141,18 +164,22 @@ async function main() {
       bounds: typeof window.__props === 'function' ? window.__props() : null };
   });
   if (!bounds) { console.error('page exposed no window.__props — nothing to scan'); process.exit(1); }
-  await browser.close(); server.kill('SIGTERM');
+  await browser.close(); stopServer();
 
   const rows = analyse(px, w, h, bounds);
   console.log(`\n=== scan @ ${DIST} m ===  ${url}`);
   console.log(`  serving: ${new URL('..', import.meta.url).pathname}`);
   for (const l of logs) console.log('  ' + l);
-  console.log('\n  model                   cols  darkMin  darkMed  fillMed   bgMed  drop(fill)  drop(bg)');
+  console.log(`\n  model                   cols  darkMin  darkMed  fillMed   bgMed  drop(fill)  drop(bg)  below${P0_BAND[0]}`);
   for (const r of rows) {
-    console.log(`  ${r.name.padEnd(22)}  ${String(r.cols).padStart(4)}  ${r.darkMin.padStart(7)}  ${r.darkMed.padStart(7)}  ${r.fillMed.padStart(7)}  ${r.bgMed.padStart(6)}  ${String(r.dropFill).padStart(10)}  ${String(r.dropBg).padStart(8)}`);
+    console.log(`  ${r.name.padEnd(22)}  ${String(r.cols).padStart(4)}  ${r.darkMin.padStart(7)}  ${r.darkMed.padStart(7)}  ${r.fillMed.padStart(7)}  ${r.bgMed.padStart(6)}  ${String(r.dropFill).padStart(10)}  ${String(r.dropBg).padStart(8)}  ${String(r.subLo + '/' + r.cols).padStart(8)}`);
   }
   const mins = rows.map((r) => parseFloat(r.darkMin)).filter(Number.isFinite);
-  console.log(`\n  darkMin band: ${Math.min(...mins).toFixed(1)} - ${Math.max(...mins).toFixed(1)}  (P0 test rock: 69.8)`);
+  const meds = rows.map((r) => parseFloat(r.darkMed)).filter(Number.isFinite);
+  console.log(`\n  darkMin band: ${Math.min(...mins).toFixed(1)} - ${Math.max(...mins).toFixed(1)}   darkMed band: ${Math.min(...meds).toFixed(1)} - ${Math.max(...meds).toFixed(1)}`);
+  console.log(`  P0 verified band: ${P0_BAND[0]} - ${P0_BAND[1]} (test rock 69.8). Below the floor means a DARKER`);
+  console.log('  line than P0 measured, which is the safe direction — a torn hull shows as a');
+  console.log('  BRIGHTER line with dark close to fill, i.e. as drop(fill)/drop(bg), not here.');
   if (errors.length) { console.error('errors: ' + errors.join('; ')); process.exit(1); }
   process.exit(0);
 }

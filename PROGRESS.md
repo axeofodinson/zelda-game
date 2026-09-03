@@ -271,7 +271,9 @@ means gating on an image that is wrong in the most load-bearing way.
   instrument hook (screen-space prop bounds for the scanner).
 - `src/render/lut.js` — **comment only**, no code change (proved below).
 - `scripts/roles.mjs` + `npm run roles` — **new instrument.**
-- `scripts/scan.mjs` + `npm run scan` — **new instrument.**
+- `scripts/scan.mjs` + `npm run scan` — **new instrument.** Reports `darkMin`,
+  `darkMed` and the count of columns below P0's band floor, so a single-pixel
+  extreme cannot be mistaken for the whole line.
 
 ### The map
 Names and usage cross-checked against `assets/raw/kenney-nature-kit/palette.json`
@@ -346,49 +348,54 @@ All at module load, so a bad map fails the build rather than a playtest.
 ### Verify — the instrument, not the eye
 
 **1. Silhouette scan at 25 m — hull continuity holds.** P0 and P1 both gated on
-this and neither committed the scanner, so `scripts/scan.mjs` is committed now
-and P1's numbers were re-measured with it. Baseline is a worktree at `9dc76ae`
-(merged P1) scanned by the *identical* scanner — the comparison is paired, not
-against P1's published table. Cross-check that the scanner is sound: on the
-baseline it reproduces P1's table closely (`mushroom` 64.9 vs 64.9,
-`cliff_blockSlope_rock` 99.3 vs 101.4, `stone_largeD` 78.3 vs 81.8); it scans the
-full projected width rather than P1's 41 columns, which is where the rest of the
-spread comes from.
+this and neither committed the scanner, so `scripts/scan.mjs` is committed now.
+The baseline is **P0's verified band, 61–101, test rock 69.8** — not a re-scan of
+an earlier revision. An earlier P1b run did scan a worktree at `9dc76ae` as a
+paired baseline; that run is **discarded**, because attributing pixels to props
+there needed a hook that revision does not carry, so it was not the same method
+and was not comparable.
 
-| model | darkMin P1 → P1b | fillMed P1 → P1b | drop(bg) P1 → P1b |
-|---|---|---|---|
-| tree_default | 57.6 → 57.6 | 177.9 → 163.0 | 0 → 0 |
-| tree_pineTallD | 55.7 → 52.9 | 146.2 → 110.2 | 0 → 0 |
-| plant_bushLarge | 63.1 → 63.1 | 128.9 → 117.9 | 0 → 0 |
-| rock_tallE | 74.0 → 71.3 | 156.8 → 156.8 | 55 → 43 |
-| stone_largeD | 78.3 → 73.1 | 221.7 → 138.7 | 49 → 49 |
-| cliff_blockSlope_rock | 99.3 → 87.7 | 173.3 → 108.4 | 0 → 0 |
-| stump_round | 64.1 → 64.1 | 156.8 → 100.1 | 0 → 0 |
-| mushroom_(red→tan)Tall | 64.9 → 64.9 | 152.5 → 105.3 | 0 → 0 |
+| model | cols | darkMin | darkMed | drop(fill) | drop(bg) | cols below 61 |
+|---|---|---|---|---|---|---|
+| tree_default | 146 | 57.6 | 86.5 | 59 | 0 | 2/146 |
+| tree_pineTallD | 100 | 52.9 | 75.8 | 31 | 0 | 9/100 |
+| plant_bushLarge | 45 | 63.1 | 103.7 | 21 | 0 | 0/45 |
+| rock_tallE | 61 | 71.3 | 92.4 | 2 | 43 | 0/61 |
+| stone_largeD | 141 | 73.1 | 76.5 | 9 | 49 | 0/141 |
+| cliff_blockSlope_rock | 184 | 87.7 | 90.2 | 57 | 0 | 0/184 |
+| stump_round | 54 | 64.1 | 69.7 | 8 | 0 | 0/54 |
+| mushroom_tanTall | 25 | 64.9 | 69.6 | 1 | 0 | 0/25 |
 
-**Read: the ink line did not move.** `darkMin` is identical or *darker* on every
-one of the eight (0 to −11.6), never brighter, so no silhouette lost contrast;
-the band sits where P0's verified test rock (69.8) sits. `drop(bg)` — separation
-from the backdrop, the metric that actually detects a torn hull — is unchanged or
-better everywhere. What did move is `fillMed`: interiors are markedly darker now,
-which is the entire point (a canopy is no longer sky-bright). That narrows the
-ink-vs-*interior* contrast, so `drop(fill)` ticks up a few columns per model —
-a consequence of the fix, not a defect, and `drop(fill)` was already flagged in
-P1 as the softer of the two metrics.
+**Read: the hull is continuous on all eight.** Six of eight `darkMin` sit inside
+61–101. The two that do not — `tree_default` 57.6 and `tree_pineTallD` 52.9 —
+are *below* the floor, meaning a **darker** line than P0 measured, which is the
+safe direction: a torn hull shows as a **brighter** line with `dark` close to
+`fill`, never a darker one. `darkMin` is a single-pixel extreme by construction,
+so the scanner now also reports how many columns actually fall below the floor:
+**11 of 756 scanned columns, 1.5%, all of them on those two models**, and both
+have a canopy overhanging a trunk where two hull lines superimpose. Their
+`darkMed` — 86.5 and 75.8 — sits mid-band, and `drop(bg)` is **0** on both: not
+one column where the line fails to be darker than the backdrop it crosses.
+`drop(bg)` is the metric that detects a tear, and it is 0 or better than the
+model's own backdrop everywhere except `rock_tallE`/`stone_largeD`, whose
+backdrop is the fogged horizon band — *darker than their own ink*, the metric
+artifact P1 already recorded.
 
-**2. Canopy vs sky — 5.0× better separated.** `tree_plateau` (`leafsGreen` +
-`woodBark`), same rig, same pixel, both revisions:
+**2. Canopy vs sky — 5.1× better separated.** `npm run probe` on
+`tree_plateau` (`leafsGreen` + `woodBark`) at the 25 m rig:
 
-| | canopy lit | canopy shadow band | sky |
-|---|---|---|---|
-| P1 | `(121,196,201)` | `(61,142,194)` | `(126,200,227)` |
-| P1b | `(107,187,84)` | `(55,136,83)` | `(126,200,227)` |
+| sample | rgb | role | ΔE_oklab vs sky | closest channel |
+|---|---|---|---|---|
+| canopy lit, P1 (given) | `(122,196,201)` | `sear` (was) | 0.0372 | 4 |
+| **canopy lit, P1b** | `(107,187,84)` | **`grass` `#6DBE45`** | **0.1886** | 13 |
+| canopy shadow band, P1b | `(55,136,83)` | `grass` | 0.2595 | 64 |
+| sky | `(126,200,227)` | `skyDay` `#7EC8E3` | — | — |
 
-P1's lit canopy is `ΔE_oklab = 0.0375` from the sky it stands against —
-separated by its ink line alone, exactly as P1 reported (their probe read
-`(122,196,201)`; this reproduces it to one count). P1b's reads **0.1886, a 5.0×
-gain**; the shadow band goes 0.1789 → 0.2595. The canopy is `P.grass` `#6DBE45`
-under the sun ramp, unambiguously green and unambiguously not the sky.
+The sky probes `(126,200,227)`, which is `P.skyDay` exactly. `tree_plateau`'s two
+materials resolve `leafsGreen → grass` and `woodBark → wood`. Pre-fix the lit
+canopy sat `ΔE_oklab = 0.0372` from the sky behind it and within 4 counts on its
+closest channel — separated by its ink line alone. It now sits at **0.1886, a
+5.1× gain**, and 143 counts apart in blue. Pass.
 
 **3. Palette-entry histogram — 7 roles in use, all of them surface roles.**
 All 316 models loaded in the browser, 0 failed, 13 excluded.
@@ -412,10 +419,18 @@ next one. `npm run roles` computes the same histogram offline from the GLB JSON
 chunks and agrees (it counts material declarations, the browser counts mesh
 primitives, hence 661 vs 663).
 
-**4. P0 rig regression — bit-identical.** The only `src/render/*` change is a
-comment, and that is provable rather than assertable: rendering P0's rig
-(`?rock=1`, default framing) on both revisions and hashing the full canvas
-readback gives `sha256 46f3099…81db83` on **both**, over all 921,600 pixels.
+**4. P0 rig regression — the LUT is byte-identical.** `lut.js` is the only
+`src/render/*` change and it is comment-only, which is provable rather than
+assertable in two steps that need no checkout of another revision:
+- Building the 32³ LUT from **this** `lut.js` and from **P1's** (`git show
+  main:src/render/lut.js`) gives the same `sha256 a88ad2cb…d9338a` over all
+  **131,072 bytes**. The LUT is the entirety of what `lut.js` contributes to a
+  render, so nothing downstream of it can have moved.
+- P0's rig re-run (`?rock=1`, default framing), as P1 did after the `sky.js` fix:
+  clean, zero console errors. Sky probes `#7ec8e3` = `P.skyDay` exactly; the
+  `rock` box `#9e9681`; terrain `#6dbc67`. The `cloth` box probes
+  `(200,108,105)` at (568,256) — the same pixel P0's own committed frame carries
+  at (570,260), `(199,107,105)`, within one count per channel.
 
 ### Bugs found and fixed
 1. **The scan instrument could silently measure the wrong repository.** A vite
@@ -428,8 +443,38 @@ readback gives `sha256 46f3099…81db83` on **both**, over all 921,600 pixels.
    share the pattern and are worth the same guard.
 2. **A comment edit silently deleted the line it documented.** Rewriting
    `lut.js`'s distance comment dropped `const d = dl*dl*0.9 + …`. Caught by
-   reading the file back before running anything. The pixel-hash in Verify 4 is
-   what proves the final state is a comment-only change.
+   reading the file back before running anything. Because that edit matched more
+   loosely than intended, the full `git diff main` for every file touched in the
+   same pass was re-read line by line afterwards — see *Diff audit* below.
+3. **`scan.mjs` leaked its vite server on exit, so the next run could not start.**
+   `npx vite` is a shell wrapper; SIGTERM to the child killed the wrapper and
+   orphaned the real server, which then held the port and tripped the guard from
+   Bug 1 on the following run. Fixed by owning the process group (`detached`,
+   kill `-pid`) and stopping it from `exit`/`SIGINT`/`SIGTERM` handlers too, so a
+   crashed scan does not leak either. The guard from Bug 1 is what surfaced this
+   — it turned a silent wrong-repo measurement into a refusal to start.
+
+### Diff audit
+`git diff main` re-read in full for every file changed in the P1b pass, to
+confirm the Bug 2 class of accident happened nowhere else.
+- **`lut.js` — comment-only, confirmed mechanically.** Filtering the diff to
+  changed lines that are not comments yields nothing; `const d = dl*dl*0.9 +
+  da*da + db*db;` is present as unchanged context.
+- **`props.js` — every removal accounted for.** `lutLookup` (dead once the LUT is
+  no longer sampled for albedo), the `locked`/`table` build in
+  `loadPackPalette`, `stats.unmapped`, and the `colour || white` fallback. All
+  deliberate; nothing adjacent went with them.
+- **`main.js`, same edit pass — six removed lines, all six replaced:** the
+  `set=all` doc line, the import, the per-prop log, the `unmapped` accumulator,
+  the `reduce` initialiser, and the pack summary log. The `reduce` block was
+  re-read whole: every accumulator (`meshes`, `tris`, `uv`, `mats`, `roles`) is
+  present and the initialiser matches.
+- **No orphaned references** to `lutLookup`, `locked`, `stats.unmapped` or
+  `loadPackPalette(lut)` remain anywhere under `src/` or `scripts/`, and all six
+  changed/new JS files parse clean.
+- Cross-check that the accumulators actually still work: the pack load reports
+  `materials=19`, which is the 23 declared in `palette.json` minus the four that
+  live only on excluded models.
 
 ### Decisions
 - **The map is the mechanism; §3.2's text is not.** §3.2 specifies nearest-in-Oklab
@@ -459,7 +504,12 @@ readback gives `sha256 46f3099…81db83` on **both**, over all 921,600 pixels.
   individual mesh **plus its own hull mesh** — 2 draw calls per tuft, so 4,000
   tufts = 8,000 draw calls. Needs `InstancedMesh` with a per-instance hull pass.
   §3.8's 80k blades are a separate procedural system.
-- The busy-port guard from Bugs 1 belongs in `shot.mjs` and `probe.mjs` too.
+- **`shot.mjs` and `probe.mjs` need the Bug 1 guard *and* the Bug 3 fix.** Both
+  still spawn `npx vite` without owning the process group, so both orphan a
+  server on exit — verified during P1b verification, where a `probe` run left a
+  vite on 5178. Deliberately not changed in this pass, so the numbers reported
+  above correspond exactly to the instruments as committed. Next session's
+  first cheap win.
 - Second shadow cascade (carried from P0).
 
 ### Next action
